@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Invoice → Zoho Books</title>
+<style>
+  :root {
+    --green: #1F6B2E;
+    --red: #D93B2A;
+    --bg: #fafaf7;
+    --border: #e5e5e0;
+    --text: #1a1a1a;
+    --muted: #666;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 2rem; background: var(--bg); color: var(--text);
+    max-width: 900px; margin-inline: auto;
+  }
+  h1 { color: var(--green); margin-top: 0; }
+  .kind-switch { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .kind-switch button {
+    flex: 1; padding: 0.75rem; border: 2px solid var(--border); background: white;
+    border-radius: 8px; cursor: pointer; font-size: 1rem;
+  }
+  .kind-switch button.active { border-color: var(--green); background: var(--green); color: white; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 3rem;
+    text-align: center; background: white; cursor: pointer; transition: 0.15s;
+  }
+  .drop.over { border-color: var(--green); background: #f0f7f0; }
+  .drop input { display: none; }
+  .status { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: white; border: 1px solid var(--border); }
+  .status.err { border-color: var(--red); color: var(--red); }
+  .form { background: white; padding: 1.5rem; border-radius: 12px; margin-top: 1rem; border: 1px solid var(--border); }
+  .form h2 { margin-top: 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+  input, select, textarea {
+    width: 100%; padding: 0.5rem; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 0.95rem; font-family: inherit;
+  }
+  table { width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: #f5f5f0; }
+  td input { padding: 0.3rem; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+  .btn { padding: 0.75rem 1.25rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 600; }
+  .btn-primary { background: var(--green); color: white; }
+  .btn-secondary { background: white; color: var(--text); border: 1px solid var(--border); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .contact-row { display: flex; gap: 0.5rem; align-items: end; }
+  .contact-row > div:first-child { flex: 1; }
+  .totals { margin-top: 1rem; text-align: right; font-size: 1.1rem; }
+  .totals strong { color: var(--green); }
+</style>
+</head>
+<body>
+
+<h1>Invoice → Zoho Books</h1>
+<p style="color: var(--muted)">Drop a PDF or image. Extracted data is shown for review before pushing to Zoho.</p>
+
+<div class="kind-switch">
+  <button id="kind-bill" class="active" data-kind="bill">Vendor bill (expense)</button>
+  <button id="kind-invoice" data-kind="invoice">Sales invoice (revenue)</button>
+</div>
+
+<label class="drop" id="drop">
+  <input type="file" id="file" accept="application/pdf,image/*" />
+  <div>📄 Drag a file here or click to choose</div>
+  <div style="font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem">PDF or image, one at a time</div>
+</label>
+
+<div id="status" class="status" hidden></div>
+
+<div id="form" class="form" hidden>
+  <h2 id="form-title">Review extracted data</h2>
+
+  <div class="contact-row">
+    <div>
+      <label id="party-label">Vendor</label>
+      <input id="party_name" />
+    </div>
+    <div style="flex: 0 0 auto">
+      <label>&nbsp;</label>
+      <button class="btn btn-secondary" id="lookup">Lookup in Zoho</button>
+    </div>
+  </div>
+  <div id="contact-results" style="margin-top: 0.5rem; font-size: 0.9rem"></div>
+
+  <div class="grid" style="margin-top: 1rem">
+    <div><label>Document number</label><input id="document_number" /></div>
+    <div><label>GSTIN</label><input id="party_gstin" /></div>
+    <div><label>Date</label><input id="document_date" type="date" /></div>
+    <div><label>Due date</label><input id="due_date" type="date" /></div>
+    <div><label>Currency</label><input id="currency" value="INR" /></div>
+    <div><label>Place of supply</label><input id="place_of_supply" /></div>
+  </div>
+
+  <table id="lines">
+    <thead><tr><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Rate</th><th>Tax %</th><th>Amount</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
+
+  <div class="totals">
+    Subtotal: <span id="subtotal">0</span> &nbsp;|&nbsp;
+    Tax: <span id="tax">0</span> &nbsp;|&nbsp;
+    <strong>Total: <span id="total">0</span></strong>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="push">Push to Zoho Books</button>
+    <button class="btn btn-secondary" id="reset">Cancel</button>
+  </div>
+</div>
+
+<script>
+const WORKER_URL = 'https://zoho-invoice-uploader.adi-chouksey.workers.dev'; // ← set after deploy
+
+let currentKind = 'bill';
+let contactId = null;
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (msg, isErr = false) => {
+  const s = $('status');
+  s.hidden = false;
+  s.textContent = msg;
+  s.classList.toggle('err', isErr);
+};
+
+// Kind switch
+document.querySelectorAll('.kind-switch button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('.kind-switch button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    currentKind = b.dataset.kind;
+    $('party-label').textContent = currentKind === 'bill' ? 'Vendor' : 'Customer';
+  };
+});
+
+// Drag-drop
+const drop = $('drop');
+['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => {
+  ev.preventDefault(); drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, (ev) => {
+  ev.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', (ev) => {
+  const f = ev.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+$('file').onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+
+async function handleFile(file) {
+  setStatus(`Extracting from ${file.name}…`);
+  try {
+    const base64 = await fileToBase64(file);
+    const res = await fetch(`${WORKER_URL}/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileBase64: base64, mimeType: file.type, kind: currentKind }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    setStatus(`Extracted. Review and edit before pushing.`);
+    populateForm(data);
+  } catch (e) {
+    setStatus(`Extraction failed: ${e.message}`, true);
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function populateForm(d) {
+  $('form').hidden = false;
+  $('form-title').textContent = currentKind === 'bill' ? 'Review vendor bill' : 'Review sales invoice';
+  $('party_name').value = d.party_name || '';
+  $('party_gstin').value = d.party_gstin || '';
+  $('document_number').value = d.document_number || '';
+  $('document_date').value = d.document_date || '';
+  $('due_date').value = d.due_date || '';
+  $('currency').value = d.currency || 'INR';
+  $('place_of_supply').value = d.place_of_supply || '';
+  contactId = null;
+  $('contact-results').textContent = '';
+
+  const tbody = document.querySelector('#lines tbody');
+  tbody.innerHTML = '';
+  (d.line_items || []).forEach(addLineRow);
+  if (!tbody.children.length) addLineRow({});
+  recomputeTotals();
+}
+
+function addLineRow(li = {}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="li-desc" value="${esc(li.description)}" /></td>
+    <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:90px" /></td>
+    <td><input class="li-qty" type="number" step="any" value="${li.quantity ?? 1}" style="width:70px" /></td>
+    <td><input class="li-rate" type="number" step="any" value="${li.rate ?? li.amount ?? 0}" style="width:90px" /></td>
+    <td><input class="li-tax" type="number" step="any" value="${li.tax_percent ?? 18}" style="width:60px" /></td>
+    <td><input class="li-amount" type="number" step="any" value="${li.amount ?? 0}" style="width:90px" /></td>
+    <td><button class="btn btn-secondary li-del" style="padding:0.25rem 0.5rem">×</button></td>
+  `;
+  document.querySelector('#lines tbody').appendChild(tr);
+  tr.querySelectorAll('input').forEach((i) => i.addEventListener('input', recomputeTotals));
+  tr.querySelector('.li-del').onclick = () => { tr.remove(); recomputeTotals(); };
+}
+function esc(s) { return (s ?? '').toString().replace(/"/g, '&quot;'); }
+
+$('add-line').onclick = () => addLineRow({});
+
+function recomputeTotals() {
+  let sub = 0, tax = 0;
+  document.querySelectorAll('#lines tbody tr').forEach((tr) => {
+    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
+    const tp = parseFloat(tr.querySelector('.li-tax').value) || 0;
+    sub += amt;
+    tax += amt * (tp / 100);
+  });
+  $('subtotal').textContent = sub.toFixed(2);
+  $('tax').textContent = tax.toFixed(2);
+  $('total').textContent = (sub + tax).toFixed(2);
+}
+
+$('lookup').onclick = async (e) => {
+  e.preventDefault();
+  const name = $('party_name').value.trim();
+  if (!name) return;
+  const type = currentKind === 'bill' ? 'vendor' : 'customer';
+  setStatus('Searching Zoho contacts…');
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/search?name=${encodeURIComponent(name)}&type=${type}`);
+    const { contacts } = await res.json();
+    const div = $('contact-results');
+    if (!contacts?.length) {
+      div.innerHTML = '<em>No match. A new contact will be created in Zoho on push.</em>';
+      contactId = null;
+    } else {
+      div.innerHTML = contacts.slice(0, 5).map((c) =>
+        `<label style="display:block; margin: 0.25rem 0">
+          <input type="radio" name="contact" value="${c.contact_id}" /> ${c.contact_name}
+        </label>`
+      ).join('');
+      div.querySelectorAll('input[name=contact]').forEach((r) =>
+        r.addEventListener('change', () => { contactId = r.value; })
+      );
+    }
+    setStatus('Done.');
+  } catch (err) {
+    setStatus(`Lookup failed: ${err.message}`, true);
+  }
+};
+
+$('push').onclick = async () => {
+  const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => ({
+    name: tr.querySelector('.li-desc').value,
+    hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
+    quantity: parseFloat(tr.querySelector('.li-qty').value) || 1,
+    rate: parseFloat(tr.querySelector('.li-rate').value) || 0,
+    tax_percentage: parseFloat(tr.querySelector('.li-tax').value) || 0,
+  }));
+
+  const base = {
+    [currentKind === 'bill' ? 'bill_number' : 'invoice_number']: $('document_number').value,
+    [currentKind === 'bill' ? 'bill_date' : 'date']: $('document_date').value,
+    due_date: $('due_date').value || undefined,
+    place_of_supply: $('place_of_supply').value || undefined,
+    line_items: lines,
+  };
+
+  if (currentKind === 'bill') {
+    base.vendor_id = contactId || undefined;
+    if (!contactId) base.vendor_name = $('party_name').value;
+  } else {
+    base.customer_id = contactId || undefined;
+    if (!contactId) base.customer_name = $('party_name').value;
+  }
+
+  setStatus('Pushing to Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: currentKind, payload: base }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'push failed');
+    setStatus(`✅ Created in Zoho Books. ID: ${data.bill?.bill_id || data.invoice?.invoice_id}`);
+  } catch (e) {
+    setStatus(`Push failed: ${e.message}`, true);
+  }
+};
+
+$('reset').onclick = () => {
+  $('form').hidden = true;
+  $('file').value = '';
+  setStatus('');
+};
+</script>
+</body>
+</html>
