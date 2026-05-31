@@ -97,6 +97,10 @@
     <div><label>Due date</label><input id="due_date" type="date" /></div>
     <div><label>Currency</label><input id="currency" value="INR" /></div>
     <div><label>Place of supply</label><input id="place_of_supply" /></div>
+    <div style="grid-column: 1 / -1">
+      <label>Account (applied to all line items)</label>
+      <select id="account_id"><option value="">— select account —</option></select>
+    </div>
   </div>
 
   <table id="lines">
@@ -130,6 +134,24 @@ const setStatus = (msg, isErr = false) => {
   s.textContent = msg;
   s.classList.toggle('err', isErr);
 };
+
+// Load accounts dropdown on page load
+(async () => {
+  try {
+    const res = await fetch(`${WORKER_URL}/accounts`);
+    const { accounts } = await res.json();
+    const sel = $('account_id');
+    accounts.forEach((a) => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.kind})`;
+      opt.dataset.kind = a.kind;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Failed to load accounts', e);
+  }
+})();
 
 // Kind switch
 document.querySelectorAll('.kind-switch button').forEach((b) => {
@@ -264,12 +286,19 @@ $('lookup').onclick = async (e) => {
 };
 
 $('push').onclick = async () => {
+  const accountId = $('account_id').value;
+  if (!accountId) {
+    setStatus('Please select an account from the dropdown.', true);
+    return;
+  }
+
   const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => ({
     name: tr.querySelector('.li-desc').value,
     hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
     quantity: parseFloat(tr.querySelector('.li-qty').value) || 1,
     rate: parseFloat(tr.querySelector('.li-rate').value) || 0,
     tax_percentage: parseFloat(tr.querySelector('.li-tax').value) || 0,
+    account_id: accountId,
   }));
 
   const base = {
