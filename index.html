@@ -73,6 +73,57 @@
   <div style="font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem">PDF or image, one at a time</div>
 </label>
 
+<details style="margin-top: 1rem; background: white; padding: 1rem 1.25rem; border-radius: 12px; border: 1px solid var(--border);">
+  <summary style="cursor: pointer; font-weight: 600; color: var(--green);">➕ Add new vendor or customer to Zoho</summary>
+  <div style="margin-top: 1rem">
+    <div class="grid">
+      <div>
+        <label>Contact type <span style="color: var(--red)">*</span></label>
+        <select id="nv_type">
+          <option value="vendor">Vendor (supplier)</option>
+          <option value="customer">Customer</option>
+        </select>
+      </div>
+      <div>
+        <label>Name <span style="color: var(--red)">*</span></label>
+        <input id="nv_name" placeholder="e.g. Garon Foods Pvt Ltd" />
+      </div>
+      <div>
+        <label>GST Treatment <span style="color: var(--red)">*</span></label>
+        <select id="nv_gst_treatment">
+          <option value="">— select —</option>
+          <option value="business_gst">Registered Business — Regular</option>
+          <option value="business_none">Unregistered Business</option>
+          <option value="consumer">Consumer</option>
+          <option value="overseas">Overseas</option>
+          <option value="sez">SEZ</option>
+          <option value="deemed_export">Deemed Export</option>
+        </select>
+      </div>
+      <div id="nv_gst_no_wrap" style="display: none">
+        <label>GSTIN <span style="color: var(--red)">*</span></label>
+        <input id="nv_gst_no" placeholder="15-char e.g. 23AANCC6178K1Z7" maxlength="15" style="text-transform: uppercase" />
+      </div>
+      <div>
+        <label>Primary contact first name</label>
+        <input id="nv_first_name" placeholder="optional" />
+      </div>
+      <div>
+        <label>Primary contact last name</label>
+        <input id="nv_last_name" placeholder="optional" />
+      </div>
+      <div style="grid-column: 1 / -1">
+        <label>Primary contact email</label>
+        <input id="nv_email" type="email" placeholder="optional" />
+      </div>
+    </div>
+    <div style="margin-top: 1rem">
+      <button class="btn btn-primary" id="nv_save">Create in Zoho</button>
+      <span id="nv_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
+    </div>
+  </div>
+</details>
+
 <div id="status" class="status" hidden></div>
 
 <div id="form" class="form" hidden>
@@ -336,6 +387,58 @@ $('reset').onclick = () => {
   $('form').hidden = true;
   $('file').value = '';
   setStatus('');
+};
+
+// ===== Vendor / customer creation panel =====
+
+// Show GSTIN field only when GST Treatment is "Registered Business"
+$('nv_gst_treatment').addEventListener('change', (e) => {
+  $('nv_gst_no_wrap').style.display = e.target.value === 'business_gst' ? '' : 'none';
+  if (e.target.value !== 'business_gst') $('nv_gst_no').value = '';
+});
+
+$('nv_save').onclick = async (e) => {
+  e.preventDefault();
+  const setNvStatus = (msg, isErr = false) => {
+    const s = $('nv_status');
+    s.textContent = msg;
+    s.style.color = isErr ? 'var(--red)' : 'var(--green)';
+  };
+
+  const payload = {
+    type: $('nv_type').value,
+    name: $('nv_name').value.trim(),
+    gst_treatment: $('nv_gst_treatment').value,
+    gst_no: $('nv_gst_no').value.trim().toUpperCase(),
+    first_name: $('nv_first_name').value.trim(),
+    last_name: $('nv_last_name').value.trim(),
+    email: $('nv_email').value.trim(),
+  };
+
+  // Client-side validation (worker validates too, but fail fast)
+  if (!payload.name) return setNvStatus('Name is required', true);
+  if (!payload.gst_treatment) return setNvStatus('GST Treatment is required', true);
+  if (payload.gst_treatment === 'business_gst' && !payload.gst_no) {
+    return setNvStatus('GSTIN is required for Registered Business', true);
+  }
+
+  setNvStatus('Creating in Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'create failed');
+    setNvStatus(`✅ Created. Contact ID: ${data.contact.contact_id}`);
+    // Clear form
+    ['nv_name', 'nv_gst_no', 'nv_first_name', 'nv_last_name', 'nv_email'].forEach((id) => ($(id).value = ''));
+    $('nv_gst_treatment').value = '';
+    $('nv_gst_no_wrap').style.display = 'none';
+  } catch (err) {
+    setNvStatus(`Failed: ${err.message}`, true);
+  }
 };
 </script>
 </body>
