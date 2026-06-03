@@ -216,7 +216,7 @@
     </div>
 
     <table id="lines">
-      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Tax %</th><th>Incl. tax</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Tax %</th><th>Exempt.</th><th>Incl. tax</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
     <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
@@ -265,10 +265,15 @@ const setStatus = (msg, isErr = false, isOk = false) => {
   s.classList.toggle('ok', isOk);
 };
 
+let taxExemptions = []; // populated on load
+
 (async () => {
   try {
-    const res = await fetch(`${WORKER_URL}/accounts`);
-    const { accounts } = await res.json();
+    const [accRes, exRes] = await Promise.all([
+      fetch(`${WORKER_URL}/accounts`),
+      fetch(`${WORKER_URL}/tax-exemptions`),
+    ]);
+    const { accounts } = await accRes.json();
     const sel = $('account_id');
     accounts.forEach((a) => {
       const opt = document.createElement('option');
@@ -276,7 +281,9 @@ const setStatus = (msg, isErr = false, isOk = false) => {
       opt.textContent = `${a.name} (${a.kind})`;
       sel.appendChild(opt);
     });
-  } catch (e) { console.error('Failed to load accounts', e); }
+    const exData = await exRes.json();
+    taxExemptions = exData.exemptions || [];
+  } catch (e) { console.error('Failed to load accounts/exemptions', e); }
 })();
 
 document.querySelectorAll('.kind-switch button').forEach((b) => {
@@ -390,10 +397,22 @@ function addLineRow(li = {}) {
     <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:75px" /></td>
     <td><input class="li-amount" type="number" step="any" value="${(+baseAmount).toFixed(2)}" style="width:85px" title="Pre-tax line total. Edit to override Qty × Rate." /></td>
     <td><input class="li-tax" type="number" step="any" value="${taxPercent}" style="width:55px" /></td>
+    <td><select class="li-exempt" style="width:100px; font-size: 0.8rem; display:none" title="Required when Tax % is 0"><option value="">— select —</option></select></td>
     <td><input class="li-incl" type="number" step="any" value="${inclTax.toFixed(2)}" style="width:85px; background: #f5f5f0" readonly title="Auto-calculated: Amount + tax" /></td>
     <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
   `;
   document.querySelector('#lines tbody').appendChild(tr);
+
+  // Populate the exemption dropdown — no default; user must pick
+  const exemptSelect = tr.querySelector('.li-exempt');
+  taxExemptions.forEach((ex) => {
+    const opt = document.createElement('option');
+    opt.value = ex.tax_exemption_code || ex.exemption_reason || ex.name;
+    opt.textContent = ex.tax_exemption_code || ex.exemption_reason || ex.name;
+    exemptSelect.appendChild(opt);
+  });
+  // Show/hide based on initial tax %
+  exemptSelect.style.display = (parseFloat(taxPercent) || 0) === 0 ? '' : 'none';
 
   const qtyInput = tr.querySelector('.li-qty');
   const rateInput = tr.querySelector('.li-rate');
@@ -417,6 +436,8 @@ function addLineRow(li = {}) {
   };
   const onAmtTaxChange = () => {
     updateIncl();
+    // Show exemption dropdown only when tax is 0
+    exemptSelect.style.display = (parseFloat(taxInput.value) || 0) === 0 ? '' : 'none';
     recomputeTotals();
   };
 
@@ -571,20 +592,43 @@ $('push').onclick = async () => {
     return;
   }
 
-  const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => {
+  // Validate: every zero-tax line must have an exemption code chosen.
+  const rows = [...document.querySelectorAll('#lines tbody tr')];
+  for (const tr of rows) {
+    const taxPct = parseFloat(tr.querySelector('.li-tax').value) || 0;
+    const exemptSel = tr.querySelector('.li-exempt');
+    if (taxPct === 0 && !exemptSel.value) {
+      setStatus('Pick an exemption reason for every line with 0% tax, then push again.', true);
+      exemptSel.style.borderColor = 'var(--red)';
+      exemptSel.style.boxShadow = '0 0 0 3px rgba(217, 59, 42, 0.15)';
+      exemptSel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      exemptSel.focus();
+      exemptSel.addEventListener('change', () => {
+        exemptSel.style.borderColor = '';
+        exemptSel.style.boxShadow = '';
+      }, { once: true });
+      return;
+    }
+  }
+
+  const lines = rows.map((tr) => {
     const qty = parseFloat(tr.querySelector('.li-qty').value) || 1;
     const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
-    // Use Amount as the source of truth — derive rate = amount / qty so Zoho's
-    // own math (qty × rate) reproduces what the user saw in the form.
+    const taxPct = parseFloat(tr.querySelector('.li-tax').value) || 0;
     const effectiveRate = qty ? amt / qty : 0;
-    return {
+    const line = {
       name: tr.querySelector('.li-desc').value,
       hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
       quantity: qty,
       rate: effectiveRate,
-      tax_percentage: parseFloat(tr.querySelector('.li-tax').value) || 0,
+      tax_percentage: taxPct,
       account_id: accountId,
     };
+    if (taxPct === 0) {
+      const exempt = tr.querySelector('.li-exempt').value;
+      if (exempt) line.tax_exemption_code = exempt;
+    }
+    return line;
   });
 
   const base = {
