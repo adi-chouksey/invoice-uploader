@@ -363,12 +363,23 @@ function populateForm(d) {
 
 function addLineRow(li = {}) {
   const tr = document.createElement('tr');
-  // Trust qty and rate from Gemini. Don't back-calc rate from amount —
-  // many invoice formats put a tax-inclusive value in 'amount', which would
-  // poison the pre-tax base and cause tax to double-count.
-  const qty = li.quantity ?? 1;
-  const rate = li.rate ?? 0;
   const taxPercent = li.tax_percent ?? 18;
+
+  // Three possible cases from extraction:
+  //   1. rate is given → use qty × rate
+  //   2. rate missing but amount given → treat as lump sum (qty=1, rate=amount)
+  //   3. nothing useful → blank row, user fills it in
+  let qty = li.quantity ?? 1;
+  let rate;
+  if (li.rate !== undefined && li.rate !== null && li.rate > 0) {
+    rate = li.rate;
+  } else if (li.amount !== undefined && li.amount !== null) {
+    // Lump sum: collapse to qty=1, rate=amount
+    qty = 1;
+    rate = li.amount;
+  } else {
+    rate = 0;
+  }
   const baseAmount = qty * rate;
   const inclTax = baseAmount * (1 + taxPercent / 100);
 
