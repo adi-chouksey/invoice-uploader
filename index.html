@@ -216,7 +216,7 @@
     </div>
 
     <table id="lines">
-      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Tax %</th><th>Amount</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Tax %</th><th>Incl. tax</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
     <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
@@ -363,8 +363,7 @@ function populateForm(d) {
 
 function addLineRow(li = {}) {
   const tr = document.createElement('tr');
-  // If amount is provided but rate isn't, back-calculate rate = amount / qty
-  // This handles the common case where Gemini extracts only the line total.
+  // Resolve initial values. If Gemini extracted amount but no rate, back-calc rate.
   const qty = li.quantity ?? 1;
   let rate = li.rate;
   if ((rate === undefined || rate === null) && li.amount !== undefined && qty) {
@@ -372,32 +371,50 @@ function addLineRow(li = {}) {
   }
   rate = rate ?? 0;
   const taxPercent = li.tax_percent ?? 18;
-  const baseAmount = qty * rate;
+  const baseAmount = (li.amount !== undefined && li.amount !== null) ? li.amount : qty * rate;
+  const inclTax = baseAmount * (1 + taxPercent / 100);
 
   tr.innerHTML = `
     <td><input class="li-desc" value="${esc(li.description)}" /></td>
     <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:80px" /></td>
-    <td><input class="li-qty" type="number" step="any" value="${qty}" style="width:60px" /></td>
-    <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:80px" /></td>
+    <td><input class="li-qty" type="number" step="any" value="${qty}" style="width:55px" /></td>
+    <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:75px" /></td>
+    <td><input class="li-amount" type="number" step="any" value="${(+baseAmount).toFixed(2)}" style="width:85px" title="Pre-tax line total. Edit to override Qty × Rate." /></td>
     <td><input class="li-tax" type="number" step="any" value="${taxPercent}" style="width:55px" /></td>
-    <td><input class="li-amount" type="number" step="any" value="${baseAmount.toFixed(2)}" style="width:80px; background: #f5f5f0" readonly title="Auto-calculated: Qty × Rate (pre-tax)" /></td>
+    <td><input class="li-incl" type="number" step="any" value="${inclTax.toFixed(2)}" style="width:85px; background: #f5f5f0" readonly title="Auto-calculated: Amount + tax" /></td>
     <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
   `;
   document.querySelector('#lines tbody').appendChild(tr);
 
-  // When qty or rate changes, recompute the amount cell first, then totals
   const qtyInput = tr.querySelector('.li-qty');
   const rateInput = tr.querySelector('.li-rate');
   const amtInput = tr.querySelector('.li-amount');
-  const recomputeRow = () => {
+  const taxInput = tr.querySelector('.li-tax');
+  const inclInput = tr.querySelector('.li-incl');
+
+  // When qty or rate changes → recompute Amount (pre-tax), then Incl. tax
+  const onQtyRateChange = () => {
     const q = parseFloat(qtyInput.value) || 0;
     const r = parseFloat(rateInput.value) || 0;
     amtInput.value = (q * r).toFixed(2);
+    updateIncl();
     recomputeTotals();
   };
-  qtyInput.addEventListener('input', recomputeRow);
-  rateInput.addEventListener('input', recomputeRow);
-  tr.querySelector('.li-tax').addEventListener('input', recomputeTotals);
+  // When Amount or Tax % changes → recompute Incl. tax only (don't touch qty/rate)
+  const updateIncl = () => {
+    const a = parseFloat(amtInput.value) || 0;
+    const tp = parseFloat(taxInput.value) || 0;
+    inclInput.value = (a * (1 + tp / 100)).toFixed(2);
+  };
+  const onAmtTaxChange = () => {
+    updateIncl();
+    recomputeTotals();
+  };
+
+  qtyInput.addEventListener('input', onQtyRateChange);
+  rateInput.addEventListener('input', onQtyRateChange);
+  amtInput.addEventListener('input', onAmtTaxChange);
+  taxInput.addEventListener('input', onAmtTaxChange);
 
   tr.querySelector('.li-del').onclick = () => { tr.remove(); recomputeTotals(); };
 }
@@ -408,13 +425,10 @@ $('add-line').onclick = () => addLineRow({});
 function recomputeTotals() {
   let sub = 0, tax = 0;
   document.querySelectorAll('#lines tbody tr').forEach((tr) => {
-    // Always derive base from qty × rate (the source of truth), not the amount cell
-    const q = parseFloat(tr.querySelector('.li-qty').value) || 0;
-    const r = parseFloat(tr.querySelector('.li-rate').value) || 0;
+    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
     const tp = parseFloat(tr.querySelector('.li-tax').value) || 0;
-    const lineBase = q * r;
-    sub += lineBase;
-    tax += lineBase * (tp / 100);
+    sub += amt;
+    tax += amt * (tp / 100);
   });
   $('subtotal').textContent = sub.toFixed(2);
   $('tax').textContent = tax.toFixed(2);
@@ -548,14 +562,21 @@ $('push').onclick = async () => {
     return;
   }
 
-  const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => ({
-    name: tr.querySelector('.li-desc').value,
-    hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
-    quantity: parseFloat(tr.querySelector('.li-qty').value) || 1,
-    rate: parseFloat(tr.querySelector('.li-rate').value) || 0,
-    tax_percentage: parseFloat(tr.querySelector('.li-tax').value) || 0,
-    account_id: accountId,
-  }));
+  const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => {
+    const qty = parseFloat(tr.querySelector('.li-qty').value) || 1;
+    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
+    // Use Amount as the source of truth — derive rate = amount / qty so Zoho's
+    // own math (qty × rate) reproduces what the user saw in the form.
+    const effectiveRate = qty ? amt / qty : 0;
+    return {
+      name: tr.querySelector('.li-desc').value,
+      hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
+      quantity: qty,
+      rate: effectiveRate,
+      tax_percentage: parseFloat(tr.querySelector('.li-tax').value) || 0,
+      account_id: accountId,
+    };
+  });
 
   const base = {
     [currentKind === 'bill' ? 'bill_number' : 'invoice_number']: $('document_number').value,
