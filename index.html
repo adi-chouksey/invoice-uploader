@@ -363,17 +363,42 @@ function populateForm(d) {
 
 function addLineRow(li = {}) {
   const tr = document.createElement('tr');
+  // If amount is provided but rate isn't, back-calculate rate = amount / qty
+  // This handles the common case where Gemini extracts only the line total.
+  const qty = li.quantity ?? 1;
+  let rate = li.rate;
+  if ((rate === undefined || rate === null) && li.amount !== undefined && qty) {
+    rate = li.amount / qty;
+  }
+  rate = rate ?? 0;
+  const taxPercent = li.tax_percent ?? 18;
+  const baseAmount = qty * rate;
+
   tr.innerHTML = `
     <td><input class="li-desc" value="${esc(li.description)}" /></td>
     <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:80px" /></td>
-    <td><input class="li-qty" type="number" step="any" value="${li.quantity ?? 1}" style="width:60px" /></td>
-    <td><input class="li-rate" type="number" step="any" value="${li.rate ?? li.amount ?? 0}" style="width:80px" /></td>
-    <td><input class="li-tax" type="number" step="any" value="${li.tax_percent ?? 18}" style="width:55px" /></td>
-    <td><input class="li-amount" type="number" step="any" value="${li.amount ?? 0}" style="width:80px" /></td>
+    <td><input class="li-qty" type="number" step="any" value="${qty}" style="width:60px" /></td>
+    <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:80px" /></td>
+    <td><input class="li-tax" type="number" step="any" value="${taxPercent}" style="width:55px" /></td>
+    <td><input class="li-amount" type="number" step="any" value="${baseAmount.toFixed(2)}" style="width:80px; background: #f5f5f0" readonly title="Auto-calculated: Qty × Rate (pre-tax)" /></td>
     <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
   `;
   document.querySelector('#lines tbody').appendChild(tr);
-  tr.querySelectorAll('input').forEach((i) => i.addEventListener('input', recomputeTotals));
+
+  // When qty or rate changes, recompute the amount cell first, then totals
+  const qtyInput = tr.querySelector('.li-qty');
+  const rateInput = tr.querySelector('.li-rate');
+  const amtInput = tr.querySelector('.li-amount');
+  const recomputeRow = () => {
+    const q = parseFloat(qtyInput.value) || 0;
+    const r = parseFloat(rateInput.value) || 0;
+    amtInput.value = (q * r).toFixed(2);
+    recomputeTotals();
+  };
+  qtyInput.addEventListener('input', recomputeRow);
+  rateInput.addEventListener('input', recomputeRow);
+  tr.querySelector('.li-tax').addEventListener('input', recomputeTotals);
+
   tr.querySelector('.li-del').onclick = () => { tr.remove(); recomputeTotals(); };
 }
 function esc(s) { return (s ?? '').toString().replace(/"/g, '&quot;'); }
@@ -383,10 +408,13 @@ $('add-line').onclick = () => addLineRow({});
 function recomputeTotals() {
   let sub = 0, tax = 0;
   document.querySelectorAll('#lines tbody tr').forEach((tr) => {
-    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
+    // Always derive base from qty × rate (the source of truth), not the amount cell
+    const q = parseFloat(tr.querySelector('.li-qty').value) || 0;
+    const r = parseFloat(tr.querySelector('.li-rate').value) || 0;
     const tp = parseFloat(tr.querySelector('.li-tax').value) || 0;
-    sub += amt;
-    tax += amt * (tp / 100);
+    const lineBase = q * r;
+    sub += lineBase;
+    tax += lineBase * (tp / 100);
   });
   $('subtotal').textContent = sub.toFixed(2);
   $('tax').textContent = tax.toFixed(2);
