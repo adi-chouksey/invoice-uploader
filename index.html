@@ -371,7 +371,10 @@ function addLineRow(li = {}) {
   }
   rate = rate ?? 0;
   const taxPercent = li.tax_percent ?? 18;
-  const baseAmount = (li.amount !== undefined && li.amount !== null) ? li.amount : qty * rate;
+  // Always derive pre-tax amount from qty × rate.
+  // We don't trust li.amount because invoice formats are inconsistent —
+  // some show the line total pre-tax, others post-tax. qty × rate is unambiguous.
+  const baseAmount = qty * rate;
   const inclTax = baseAmount * (1 + taxPercent / 100);
 
   tr.innerHTML = `
