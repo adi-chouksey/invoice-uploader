@@ -8,6 +8,7 @@
   :root {
     --green: #1F6B2E;
     --red: #D93B2A;
+    --amber: #B07300;
     --bg: #fafaf7;
     --border: #e5e5e0;
     --text: #1a1a1a;
@@ -16,51 +17,71 @@
   * { box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    margin: 0; padding: 2rem; background: var(--bg); color: var(--text);
-    max-width: 900px; margin-inline: auto;
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    max-width: 1400px; margin-inline: auto;
   }
   h1 { color: var(--green); margin-top: 0; }
-  .kind-switch { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .kind-switch { display: flex; gap: 0.5rem; margin-bottom: 1rem; max-width: 700px; }
   .kind-switch button {
     flex: 1; padding: 0.75rem; border: 2px solid var(--border); background: white;
     border-radius: 8px; cursor: pointer; font-size: 1rem;
   }
   .kind-switch button.active { border-color: var(--green); background: var(--green); color: white; }
   .drop {
-    border: 2px dashed var(--border); border-radius: 12px; padding: 3rem;
+    border: 2px dashed var(--border); border-radius: 12px; padding: 2rem;
     text-align: center; background: white; cursor: pointer; transition: 0.15s;
+    max-width: 700px;
   }
   .drop.over { border-color: var(--green); background: #f0f7f0; }
   .drop input { display: none; }
   .status { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: white; border: 1px solid var(--border); }
   .status.err { border-color: var(--red); color: var(--red); }
-  .form { background: white; padding: 1.5rem; border-radius: 12px; margin-top: 1rem; border: 1px solid var(--border); }
-  .form h2 { margin-top: 0; }
+  .status.ok { border-color: var(--green); color: var(--green); }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
+
+  .form, .preview { background: white; padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border); }
+  .form h2, .preview h2 { margin-top: 0; font-size: 1.1rem; }
+  .preview { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: hidden; display: flex; flex-direction: column; }
+  .preview-body { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: #f5f5f0; min-height: 400px; }
+  .preview-body iframe, .preview-body img { width: 100%; height: 100%; min-height: 400px; border: 0; display: block; object-fit: contain; background: white; }
+
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
   label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .req { color: var(--red); }
   input, select, textarea {
     width: 100%; padding: 0.5rem; border: 1px solid var(--border);
     border-radius: 6px; font-size: 0.95rem; font-family: inherit;
   }
   table { width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--border); }
   th { background: #f5f5f0; }
   td input { padding: 0.3rem; }
-  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
-  .btn { padding: 0.75rem 1.25rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 600; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  .btn { padding: 0.6rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
   .btn-primary { background: var(--green); color: white; }
   .btn-secondary { background: white; color: var(--text); border: 1px solid var(--border); }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .totals { margin-top: 0.75rem; text-align: right; font-size: 1rem; }
+  .totals strong { color: var(--green); }
+
+  .vendor-panel {
+    background: #fff8e6; border: 1px solid var(--amber); border-radius: 8px;
+    padding: 1rem; margin-top: 0.75rem;
+  }
+  .vendor-panel h3 { margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--amber); }
+  .vendor-panel .hint { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+
   .contact-row { display: flex; gap: 0.5rem; align-items: end; }
   .contact-row > div:first-child { flex: 1; }
-  .totals { margin-top: 1rem; text-align: right; font-size: 1.1rem; }
-  .totals strong { color: var(--green); }
+  .contact-results { margin-top: 0.5rem; font-size: 0.9rem; }
+  details summary { cursor: pointer; }
 </style>
 </head>
 <body>
 
 <h1>Invoice → Zoho Books</h1>
-<p style="color: var(--muted)">Drop a PDF or image. Extracted data is shown for review before pushing to Zoho.</p>
+<p style="color: var(--muted); margin-top: 0.25rem">Drop a PDF or image. Extracted data is shown for review before pushing to Zoho.</p>
 
 <div class="kind-switch">
   <button id="kind-bill" class="active" data-kind="bill">Vendor bill (expense)</button>
@@ -73,24 +94,24 @@
   <div style="font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem">PDF or image, one at a time</div>
 </label>
 
-<details style="margin-top: 1rem; background: white; padding: 1rem 1.25rem; border-radius: 12px; border: 1px solid var(--border);">
-  <summary style="cursor: pointer; font-weight: 600; color: var(--green);">➕ Add new vendor or customer to Zoho</summary>
+<details style="margin-top: 1rem; background: white; padding: 1rem 1.25rem; border-radius: 12px; border: 1px solid var(--border); max-width: 900px;">
+  <summary style="font-weight: 600; color: var(--green);">➕ Add vendor or customer manually</summary>
   <div style="margin-top: 1rem">
     <div class="grid">
       <div>
-        <label>Contact type <span style="color: var(--red)">*</span></label>
-        <select id="nv_type">
+        <label>Contact type <span class="req">*</span></label>
+        <select id="mnv_type">
           <option value="vendor">Vendor (supplier)</option>
           <option value="customer">Customer</option>
         </select>
       </div>
       <div>
-        <label>Name <span style="color: var(--red)">*</span></label>
-        <input id="nv_name" placeholder="e.g. Garon Foods Pvt Ltd" />
+        <label>Name <span class="req">*</span></label>
+        <input id="mnv_name" placeholder="e.g. Garon Foods Pvt Ltd" />
       </div>
       <div>
-        <label>GST Treatment <span style="color: var(--red)">*</span></label>
-        <select id="nv_gst_treatment">
+        <label>GST Treatment <span class="req">*</span></label>
+        <select id="mnv_gst_treatment">
           <option value="">— select —</option>
           <option value="business_gst">Registered Business — Regular</option>
           <option value="business_none">Unregistered Business</option>
@@ -100,93 +121,150 @@
           <option value="deemed_export">Deemed Export</option>
         </select>
       </div>
-      <div id="nv_gst_no_wrap" style="display: none">
-        <label>GSTIN <span style="color: var(--red)">*</span></label>
-        <input id="nv_gst_no" placeholder="15-char e.g. 23AANCC6178K1Z7" maxlength="15" style="text-transform: uppercase" />
+      <div id="mnv_gst_no_wrap" style="display: none">
+        <label>GSTIN <span class="req">*</span></label>
+        <input id="mnv_gst_no" maxlength="15" style="text-transform: uppercase" />
       </div>
       <div>
         <label>Primary contact first name</label>
-        <input id="nv_first_name" placeholder="optional" />
+        <input id="mnv_first_name" placeholder="optional" />
       </div>
       <div>
         <label>Primary contact last name</label>
-        <input id="nv_last_name" placeholder="optional" />
+        <input id="mnv_last_name" placeholder="optional" />
       </div>
       <div style="grid-column: 1 / -1">
         <label>Primary contact email</label>
-        <input id="nv_email" type="email" placeholder="optional" />
+        <input id="mnv_email" type="email" placeholder="optional" />
       </div>
     </div>
     <div style="margin-top: 1rem">
-      <button class="btn btn-primary" id="nv_save">Create in Zoho</button>
-      <span id="nv_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
+      <button class="btn btn-primary" id="mnv_save">Create in Zoho</button>
+      <span id="mnv_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
     </div>
   </div>
 </details>
 
 <div id="status" class="status" hidden></div>
 
-<div id="form" class="form" hidden>
-  <h2 id="form-title">Review extracted data</h2>
+<div id="split" class="split" hidden>
+  <div class="form">
+    <h2 id="form-title">Review extracted data</h2>
 
-  <div class="contact-row">
-    <div>
-      <label id="party-label">Vendor</label>
-      <input id="party_name" />
+    <div class="contact-row">
+      <div>
+        <label id="party-label">Vendor</label>
+        <input id="party_name" />
+      </div>
+      <div style="flex: 0 0 auto">
+        <label>&nbsp;</label>
+        <button class="btn btn-secondary" id="lookup">Lookup in Zoho</button>
+      </div>
     </div>
-    <div style="flex: 0 0 auto">
-      <label>&nbsp;</label>
-      <button class="btn btn-secondary" id="lookup">Lookup in Zoho</button>
+    <div id="contact-results" class="contact-results"></div>
+
+    <div id="inline-vendor-panel" class="vendor-panel" style="display: none">
+      <h3 id="ivp_title">Vendor not found in Zoho</h3>
+      <div class="hint">Fill in the details below and click <strong>Create vendor</strong>. The new vendor will be used for this bill automatically.</div>
+      <div class="grid">
+        <div>
+          <label>GST Treatment <span class="req">*</span></label>
+          <select id="ivp_gst_treatment">
+            <option value="">— select —</option>
+            <option value="business_gst">Registered Business — Regular</option>
+            <option value="business_none">Unregistered Business</option>
+            <option value="consumer">Consumer</option>
+            <option value="overseas">Overseas</option>
+            <option value="sez">SEZ</option>
+            <option value="deemed_export">Deemed Export</option>
+          </select>
+        </div>
+        <div id="ivp_gst_no_wrap" style="display: none">
+          <label>GSTIN <span class="req">*</span></label>
+          <input id="ivp_gst_no" maxlength="15" style="text-transform: uppercase" />
+        </div>
+        <div>
+          <label>Primary contact first name</label>
+          <input id="ivp_first_name" placeholder="optional" />
+        </div>
+        <div>
+          <label>Primary contact last name</label>
+          <input id="ivp_last_name" placeholder="optional" />
+        </div>
+        <div style="grid-column: 1 / -1">
+          <label>Primary contact email</label>
+          <input id="ivp_email" type="email" placeholder="optional" />
+        </div>
+      </div>
+      <div style="margin-top: 0.75rem">
+        <button class="btn btn-primary" id="ivp_save">Create vendor &amp; use</button>
+        <span id="ivp_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 1rem">
+      <div><label>Document number</label><input id="document_number" /></div>
+      <div><label>Party GSTIN</label><input id="party_gstin" style="text-transform: uppercase" /></div>
+      <div><label>Date</label><input id="document_date" type="date" /></div>
+      <div><label>Due date</label><input id="due_date" type="date" /></div>
+      <div><label>Currency</label><input id="currency" value="INR" /></div>
+      <div><label>Place of supply</label><input id="place_of_supply" /></div>
+      <div style="grid-column: 1 / -1">
+        <label>Account (applied to all line items) <span class="req">*</span></label>
+        <select id="account_id"><option value="">— select account —</option></select>
+      </div>
+    </div>
+
+    <table id="lines">
+      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Tax %</th><th>Amount</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
+
+    <div class="totals">
+      Subtotal: <span id="subtotal">0</span> &nbsp;|&nbsp;
+      Tax: <span id="tax">0</span> &nbsp;|&nbsp;
+      <strong>Total: <span id="total">0</span></strong>
+    </div>
+
+    <div class="actions">
+      <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9rem; margin: 0;">
+        <input type="checkbox" id="attach_file" checked style="width: auto; margin: 0;" />
+        Attach this file to the bill in Zoho
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="push">Push to Zoho Books</button>
+      <button class="btn btn-secondary" id="reset">Cancel</button>
     </div>
   </div>
-  <div id="contact-results" style="margin-top: 0.5rem; font-size: 0.9rem"></div>
 
-  <div class="grid" style="margin-top: 1rem">
-    <div><label>Document number</label><input id="document_number" /></div>
-    <div><label>GSTIN</label><input id="party_gstin" /></div>
-    <div><label>Date</label><input id="document_date" type="date" /></div>
-    <div><label>Due date</label><input id="due_date" type="date" /></div>
-    <div><label>Currency</label><input id="currency" value="INR" /></div>
-    <div><label>Place of supply</label><input id="place_of_supply" /></div>
-    <div style="grid-column: 1 / -1">
-      <label>Account (applied to all line items)</label>
-      <select id="account_id"><option value="">— select account —</option></select>
+  <div class="preview">
+    <h2>Original file</h2>
+    <div class="preview-body" id="preview-body">
+      <div style="padding: 2rem; color: var(--muted); text-align: center">Loading preview…</div>
     </div>
-  </div>
-
-  <table id="lines">
-    <thead><tr><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Rate</th><th>Tax %</th><th>Amount</th><th></th></tr></thead>
-    <tbody></tbody>
-  </table>
-  <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
-
-  <div class="totals">
-    Subtotal: <span id="subtotal">0</span> &nbsp;|&nbsp;
-    Tax: <span id="tax">0</span> &nbsp;|&nbsp;
-    <strong>Total: <span id="total">0</span></strong>
-  </div>
-
-  <div class="actions">
-    <button class="btn btn-primary" id="push">Push to Zoho Books</button>
-    <button class="btn btn-secondary" id="reset">Cancel</button>
   </div>
 </div>
 
 <script>
-const WORKER_URL = 'https://zoho-invoice-uploader.adi-chouksey.workers.dev'; // ← set after deploy
+const WORKER_URL = 'https://zoho-invoice-uploader.adi-chouksey.workers.dev';
 
 let currentKind = 'bill';
 let contactId = null;
+let currentFile = null;
+let currentFileBase64 = null;
+let currentMimeType = null;
 
 const $ = (id) => document.getElementById(id);
-const setStatus = (msg, isErr = false) => {
+const setStatus = (msg, isErr = false, isOk = false) => {
   const s = $('status');
   s.hidden = false;
   s.textContent = msg;
   s.classList.toggle('err', isErr);
+  s.classList.toggle('ok', isOk);
 };
 
-// Load accounts dropdown on page load
 (async () => {
   try {
     const res = await fetch(`${WORKER_URL}/accounts`);
@@ -196,42 +274,37 @@ const setStatus = (msg, isErr = false) => {
       const opt = document.createElement('option');
       opt.value = a.id;
       opt.textContent = `${a.name} (${a.kind})`;
-      opt.dataset.kind = a.kind;
       sel.appendChild(opt);
     });
-  } catch (e) {
-    console.error('Failed to load accounts', e);
-  }
+  } catch (e) { console.error('Failed to load accounts', e); }
 })();
 
-// Kind switch
 document.querySelectorAll('.kind-switch button').forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll('.kind-switch button').forEach((x) => x.classList.remove('active'));
     b.classList.add('active');
     currentKind = b.dataset.kind;
     $('party-label').textContent = currentKind === 'bill' ? 'Vendor' : 'Customer';
+    contactId = null;
+    $('inline-vendor-panel').style.display = 'none';
+    $('contact-results').innerHTML = '';
   };
 });
 
-// Drag-drop
 const drop = $('drop');
-['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => {
-  ev.preventDefault(); drop.classList.add('over');
-}));
-['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, (ev) => {
-  ev.preventDefault(); drop.classList.remove('over');
-}));
-drop.addEventListener('drop', (ev) => {
-  const f = ev.dataTransfer.files[0];
-  if (f) handleFile(f);
-});
+['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (ev) => { const f = ev.dataTransfer.files[0]; if (f) handleFile(f); });
 $('file').onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
 
 async function handleFile(file) {
+  currentFile = file;
+  currentMimeType = file.type;
   setStatus(`Extracting from ${file.name}…`);
   try {
     const base64 = await fileToBase64(file);
+    currentFileBase64 = base64;
+    renderPreview(file);
     const res = await fetch(`${WORKER_URL}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -239,10 +312,23 @@ async function handleFile(file) {
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
-    setStatus(`Extracted. Review and edit before pushing.`);
+    setStatus('Extracted. Review and edit before pushing.', false, true);
     populateForm(data);
+    if (data.party_name) doLookup();
   } catch (e) {
     setStatus(`Extraction failed: ${e.message}`, true);
+  }
+}
+
+function renderPreview(file) {
+  const body = $('preview-body');
+  const url = URL.createObjectURL(file);
+  if (file.type === 'application/pdf') {
+    body.innerHTML = `<iframe src="${url}#toolbar=0&navpanes=0"></iframe>`;
+  } else if (file.type.startsWith('image/')) {
+    body.innerHTML = `<img src="${url}" alt="invoice preview" />`;
+  } else {
+    body.innerHTML = `<div style="padding: 2rem; color: var(--muted); text-align: center">Preview not available for this file type.</div>`;
   }
 }
 
@@ -256,17 +342,18 @@ function fileToBase64(file) {
 }
 
 function populateForm(d) {
-  $('form').hidden = false;
+  $('split').hidden = false;
   $('form-title').textContent = currentKind === 'bill' ? 'Review vendor bill' : 'Review sales invoice';
   $('party_name').value = d.party_name || '';
-  $('party_gstin').value = d.party_gstin || '';
+  $('party_gstin').value = (d.party_gstin || '').toUpperCase();
   $('document_number').value = d.document_number || '';
   $('document_date').value = d.document_date || '';
   $('due_date').value = d.due_date || '';
   $('currency').value = d.currency || 'INR';
   $('place_of_supply').value = d.place_of_supply || '';
   contactId = null;
-  $('contact-results').textContent = '';
+  $('contact-results').innerHTML = '';
+  $('inline-vendor-panel').style.display = 'none';
 
   const tbody = document.querySelector('#lines tbody');
   tbody.innerHTML = '';
@@ -279,12 +366,12 @@ function addLineRow(li = {}) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td><input class="li-desc" value="${esc(li.description)}" /></td>
-    <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:90px" /></td>
-    <td><input class="li-qty" type="number" step="any" value="${li.quantity ?? 1}" style="width:70px" /></td>
-    <td><input class="li-rate" type="number" step="any" value="${li.rate ?? li.amount ?? 0}" style="width:90px" /></td>
-    <td><input class="li-tax" type="number" step="any" value="${li.tax_percent ?? 18}" style="width:60px" /></td>
-    <td><input class="li-amount" type="number" step="any" value="${li.amount ?? 0}" style="width:90px" /></td>
-    <td><button class="btn btn-secondary li-del" style="padding:0.25rem 0.5rem">×</button></td>
+    <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:80px" /></td>
+    <td><input class="li-qty" type="number" step="any" value="${li.quantity ?? 1}" style="width:60px" /></td>
+    <td><input class="li-rate" type="number" step="any" value="${li.rate ?? li.amount ?? 0}" style="width:80px" /></td>
+    <td><input class="li-tax" type="number" step="any" value="${li.tax_percent ?? 18}" style="width:55px" /></td>
+    <td><input class="li-amount" type="number" step="any" value="${li.amount ?? 0}" style="width:80px" /></td>
+    <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
   `;
   document.querySelector('#lines tbody').appendChild(tr);
   tr.querySelectorAll('input').forEach((i) => i.addEventListener('input', recomputeTotals));
@@ -307,41 +394,102 @@ function recomputeTotals() {
   $('total').textContent = (sub + tax).toFixed(2);
 }
 
-$('lookup').onclick = async (e) => {
-  e.preventDefault();
+async function doLookup() {
   const name = $('party_name').value.trim();
   if (!name) return;
   const type = currentKind === 'bill' ? 'vendor' : 'customer';
-  setStatus('Searching Zoho contacts…');
+  const div = $('contact-results');
+  div.innerHTML = '<em style="color: var(--muted)">Searching Zoho…</em>';
   try {
     const res = await fetch(`${WORKER_URL}/contacts/search?name=${encodeURIComponent(name)}&type=${type}`);
     const { contacts } = await res.json();
-    const div = $('contact-results');
     if (!contacts?.length) {
-      div.innerHTML = '<em>No match. A new contact will be created in Zoho on push.</em>';
+      div.innerHTML = '';
+      showInlineVendorPanel(name);
       contactId = null;
     } else {
-      div.innerHTML = contacts.slice(0, 5).map((c) =>
-        `<label style="display:block; margin: 0.25rem 0">
-          <input type="radio" name="contact" value="${c.contact_id}" /> ${c.contact_name}
-        </label>`
-      ).join('');
+      $('inline-vendor-panel').style.display = 'none';
+      div.innerHTML = '<strong style="color: var(--green)">✓ Matches found — pick one:</strong>' +
+        contacts.slice(0, 5).map((c, i) =>
+          `<label style="display:block; margin: 0.25rem 0; cursor: pointer">
+            <input type="radio" name="contact" value="${c.contact_id}" ${i === 0 ? 'checked' : ''} /> ${esc(c.contact_name)}
+          </label>`
+        ).join('');
+      contactId = contacts[0].contact_id;
       div.querySelectorAll('input[name=contact]').forEach((r) =>
         r.addEventListener('change', () => { contactId = r.value; })
       );
     }
-    setStatus('Done.');
   } catch (err) {
-    setStatus(`Lookup failed: ${err.message}`, true);
+    div.innerHTML = `<span style="color: var(--red)">Lookup failed: ${esc(err.message)}</span>`;
+  }
+}
+
+$('lookup').onclick = (e) => { e.preventDefault(); doLookup(); };
+
+function showInlineVendorPanel(name) {
+  $('inline-vendor-panel').style.display = '';
+  $('ivp_title').textContent = `⚠️ ${currentKind === 'bill' ? 'Vendor' : 'Customer'} "${name}" not found in Zoho`;
+  const extractedGstin = $('party_gstin').value.trim().toUpperCase();
+  if (extractedGstin && /^[0-9A-Z]{15}$/.test(extractedGstin)) {
+    $('ivp_gst_treatment').value = 'business_gst';
+    $('ivp_gst_no_wrap').style.display = '';
+    $('ivp_gst_no').value = extractedGstin;
+  } else {
+    $('ivp_gst_treatment').value = '';
+    $('ivp_gst_no_wrap').style.display = 'none';
+    $('ivp_gst_no').value = '';
+  }
+  $('ivp_status').textContent = '';
+}
+
+$('ivp_gst_treatment').addEventListener('change', (e) => {
+  const show = e.target.value === 'business_gst';
+  $('ivp_gst_no_wrap').style.display = show ? '' : 'none';
+  if (!show) $('ivp_gst_no').value = '';
+});
+
+$('ivp_save').onclick = async (e) => {
+  e.preventDefault();
+  const setIvpStatus = (msg, isErr = false) => {
+    const s = $('ivp_status');
+    s.textContent = msg;
+    s.style.color = isErr ? 'var(--red)' : 'var(--green)';
+  };
+  const payload = {
+    type: currentKind === 'bill' ? 'vendor' : 'customer',
+    name: $('party_name').value.trim(),
+    gst_treatment: $('ivp_gst_treatment').value,
+    gst_no: $('ivp_gst_no').value.trim().toUpperCase(),
+    first_name: $('ivp_first_name').value.trim(),
+    last_name: $('ivp_last_name').value.trim(),
+    email: $('ivp_email').value.trim(),
+  };
+  if (!payload.name) return setIvpStatus('Name is required (top field)', true);
+  if (!payload.gst_treatment) return setIvpStatus('GST Treatment is required', true);
+  if (payload.gst_treatment === 'business_gst' && !payload.gst_no) {
+    return setIvpStatus('GSTIN is required for Registered Business', true);
+  }
+  setIvpStatus('Creating in Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'create failed');
+    contactId = data.contact.contact_id;
+    setIvpStatus(`✅ Created. Will be used for this ${currentKind}.`);
+    $('contact-results').innerHTML = `<strong style="color: var(--green)">✓ New ${payload.type} created and selected: ${esc(data.contact.contact_name)}</strong>`;
+  } catch (err) {
+    setIvpStatus(`Failed: ${err.message}`, true);
   }
 };
 
 $('push').onclick = async () => {
   const accountId = $('account_id').value;
-  if (!accountId) {
-    setStatus('Please select an account from the dropdown.', true);
-    return;
-  }
+  if (!accountId) { setStatus('Please select an account from the dropdown.', true); return; }
 
   const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => ({
     name: tr.querySelector('.li-desc').value,
@@ -377,52 +525,71 @@ $('push').onclick = async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'push failed');
-    setStatus(`✅ Created in Zoho Books. ID: ${data.bill?.bill_id || data.invoice?.invoice_id}`);
+    const billId = data.bill?.bill_id || data.invoice?.invoice_id;
+    setStatus(`✅ Created in Zoho Books. ID: ${billId}`, false, true);
+
+    if ($('attach_file').checked && currentFileBase64 && currentKind === 'bill') {
+      setStatus(`Created bill ${billId}. Attaching original file…`, false, true);
+      try {
+        const ar = await fetch(`${WORKER_URL}/bills/attach`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            billId,
+            fileBase64: currentFileBase64,
+            mimeType: currentMimeType,
+            filename: currentFile?.name || 'invoice',
+          }),
+        });
+        const ad = await ar.json();
+        if (!ar.ok) throw new Error(ad.error || 'attach failed');
+        setStatus(`✅ Bill ${billId} created with attachment.`, false, true);
+      } catch (err) {
+        setStatus(`Bill created (${billId}) but attachment failed: ${err.message}`, true);
+      }
+    }
   } catch (e) {
     setStatus(`Push failed: ${e.message}`, true);
   }
 };
 
 $('reset').onclick = () => {
-  $('form').hidden = true;
+  $('split').hidden = true;
   $('file').value = '';
+  currentFile = null;
+  currentFileBase64 = null;
+  currentMimeType = null;
+  contactId = null;
   setStatus('');
 };
 
-// ===== Vendor / customer creation panel =====
-
-// Show GSTIN field only when GST Treatment is "Registered Business"
-$('nv_gst_treatment').addEventListener('change', (e) => {
-  $('nv_gst_no_wrap').style.display = e.target.value === 'business_gst' ? '' : 'none';
-  if (e.target.value !== 'business_gst') $('nv_gst_no').value = '';
+$('mnv_gst_treatment').addEventListener('change', (e) => {
+  $('mnv_gst_no_wrap').style.display = e.target.value === 'business_gst' ? '' : 'none';
+  if (e.target.value !== 'business_gst') $('mnv_gst_no').value = '';
 });
 
-$('nv_save').onclick = async (e) => {
+$('mnv_save').onclick = async (e) => {
   e.preventDefault();
-  const setNvStatus = (msg, isErr = false) => {
-    const s = $('nv_status');
+  const setMnvStatus = (msg, isErr = false) => {
+    const s = $('mnv_status');
     s.textContent = msg;
     s.style.color = isErr ? 'var(--red)' : 'var(--green)';
   };
-
   const payload = {
-    type: $('nv_type').value,
-    name: $('nv_name').value.trim(),
-    gst_treatment: $('nv_gst_treatment').value,
-    gst_no: $('nv_gst_no').value.trim().toUpperCase(),
-    first_name: $('nv_first_name').value.trim(),
-    last_name: $('nv_last_name').value.trim(),
-    email: $('nv_email').value.trim(),
+    type: $('mnv_type').value,
+    name: $('mnv_name').value.trim(),
+    gst_treatment: $('mnv_gst_treatment').value,
+    gst_no: $('mnv_gst_no').value.trim().toUpperCase(),
+    first_name: $('mnv_first_name').value.trim(),
+    last_name: $('mnv_last_name').value.trim(),
+    email: $('mnv_email').value.trim(),
   };
-
-  // Client-side validation (worker validates too, but fail fast)
-  if (!payload.name) return setNvStatus('Name is required', true);
-  if (!payload.gst_treatment) return setNvStatus('GST Treatment is required', true);
+  if (!payload.name) return setMnvStatus('Name is required', true);
+  if (!payload.gst_treatment) return setMnvStatus('GST Treatment is required', true);
   if (payload.gst_treatment === 'business_gst' && !payload.gst_no) {
-    return setNvStatus('GSTIN is required for Registered Business', true);
+    return setMnvStatus('GSTIN is required for Registered Business', true);
   }
-
-  setNvStatus('Creating in Zoho…');
+  setMnvStatus('Creating in Zoho…');
   try {
     const res = await fetch(`${WORKER_URL}/contacts/create`, {
       method: 'POST',
@@ -431,13 +598,12 @@ $('nv_save').onclick = async (e) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'create failed');
-    setNvStatus(`✅ Created. Contact ID: ${data.contact.contact_id}`);
-    // Clear form
-    ['nv_name', 'nv_gst_no', 'nv_first_name', 'nv_last_name', 'nv_email'].forEach((id) => ($(id).value = ''));
-    $('nv_gst_treatment').value = '';
-    $('nv_gst_no_wrap').style.display = 'none';
+    setMnvStatus(`✅ Created. Contact ID: ${data.contact.contact_id}`);
+    ['mnv_name', 'mnv_gst_no', 'mnv_first_name', 'mnv_last_name', 'mnv_email'].forEach((id) => ($(id).value = ''));
+    $('mnv_gst_treatment').value = '';
+    $('mnv_gst_no_wrap').style.display = 'none';
   } catch (err) {
-    setNvStatus(`Failed: ${err.message}`, true);
+    setMnvStatus(`Failed: ${err.message}`, true);
   }
 };
 </script>
