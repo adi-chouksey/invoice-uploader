@@ -165,7 +165,7 @@
 
     <div id="inline-vendor-panel" class="vendor-panel" style="display: none">
       <h3 id="ivp_title">Vendor not found in Zoho</h3>
-      <div class="hint">Fill in the details below and click <strong>Create vendor</strong>. The new vendor will be used for this bill automatically.</div>
+      <div class="hint">If this is really a new vendor, fill in the details and click <strong>Create vendor &amp; use</strong>. If the vendor might already exist under a different name (e.g. legal name vs trade name), click <strong>Cancel</strong>, edit the Vendor field above, and click <strong>Lookup in Zoho</strong> again.</div>
       <div class="grid">
         <div>
           <label>GST Treatment <span class="req">*</span></label>
@@ -196,9 +196,10 @@
           <input id="ivp_email" type="email" placeholder="optional" />
         </div>
       </div>
-      <div style="margin-top: 0.75rem">
+      <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <button class="btn btn-primary" id="ivp_save">Create vendor &amp; use</button>
-        <span id="ivp_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
+        <button class="btn btn-secondary" id="ivp_cancel">Cancel — try different name</button>
+        <span id="ivp_status" style="margin-left: 0.5rem; font-size: 0.9rem"></span>
       </div>
     </div>
 
@@ -208,7 +209,6 @@
       <div><label>Date</label><input id="document_date" type="date" /></div>
       <div><label>Due date</label><input id="due_date" type="date" /></div>
       <div><label>Currency</label><input id="currency" value="INR" /></div>
-      <div><label>Place of supply</label><input id="place_of_supply" /></div>
       <div style="grid-column: 1 / -1">
         <label>Account (applied to all line items) <span class="req">*</span></label>
         <select id="account_id"><option value="">— select account —</option></select>
@@ -350,7 +350,6 @@ function populateForm(d) {
   $('document_date').value = d.document_date || '';
   $('due_date').value = d.due_date || '';
   $('currency').value = d.currency || 'INR';
-  $('place_of_supply').value = d.place_of_supply || '';
   contactId = null;
   $('contact-results').innerHTML = '';
   $('inline-vendor-panel').style.display = 'none';
@@ -482,14 +481,44 @@ $('ivp_save').onclick = async (e) => {
     contactId = data.contact.contact_id;
     setIvpStatus(`✅ Created. Will be used for this ${currentKind}.`);
     $('contact-results').innerHTML = `<strong style="color: var(--green)">✓ New ${payload.type} created and selected: ${esc(data.contact.contact_name)}</strong>`;
+    // Hide the panel after successful creation since vendor is now resolved
+    setTimeout(() => { $('inline-vendor-panel').style.display = 'none'; }, 1500);
   } catch (err) {
     setIvpStatus(`Failed: ${err.message}`, true);
   }
 };
 
+// Cancel new-vendor creation — user thinks vendor may exist under a different name
+$('ivp_cancel').onclick = (e) => {
+  e.preventDefault();
+  $('inline-vendor-panel').style.display = 'none';
+  $('ivp_status').textContent = '';
+  // Reset just the vendor-panel-specific fields
+  ['ivp_gst_no', 'ivp_first_name', 'ivp_last_name', 'ivp_email'].forEach((id) => ($(id).value = ''));
+  $('ivp_gst_treatment').value = '';
+  $('ivp_gst_no_wrap').style.display = 'none';
+  contactId = null;
+  $('contact-results').innerHTML = '<em style="color: var(--muted)">Edit the Vendor field above and click <strong>Lookup in Zoho</strong> to search again.</em>';
+  $('party_name').focus();
+  $('party_name').select();
+};
+
 $('push').onclick = async () => {
   const accountId = $('account_id').value;
-  if (!accountId) { setStatus('Please select an account from the dropdown.', true); return; }
+  if (!accountId) {
+    setStatus('Please select an account from the "Account" dropdown below the date fields, then push again.', true);
+    // Visually highlight the dropdown
+    const sel = $('account_id');
+    sel.style.borderColor = 'var(--red)';
+    sel.style.boxShadow = '0 0 0 3px rgba(217, 59, 42, 0.15)';
+    sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    sel.focus();
+    sel.addEventListener('change', () => {
+      sel.style.borderColor = '';
+      sel.style.boxShadow = '';
+    }, { once: true });
+    return;
+  }
 
   const lines = [...document.querySelectorAll('#lines tbody tr')].map((tr) => ({
     name: tr.querySelector('.li-desc').value,
@@ -504,7 +533,6 @@ $('push').onclick = async () => {
     [currentKind === 'bill' ? 'bill_number' : 'invoice_number']: $('document_number').value,
     [currentKind === 'bill' ? 'bill_date' : 'date']: $('document_date').value,
     due_date: $('due_date').value || undefined,
-    place_of_supply: $('place_of_supply').value || undefined,
     line_items: lines,
   };
 
