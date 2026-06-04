@@ -88,6 +88,14 @@
   <button id="kind-invoice" data-kind="invoice">Sales invoice (revenue)</button>
 </div>
 
+<div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; max-width: 700px;">
+  <label style="font-size: 0.85rem; color: var(--muted); margin: 0; white-space: nowrap;">Extraction model:</label>
+  <select id="model_picker" style="flex: 1; padding: 0.4rem 0.5rem; font-size: 0.85rem;">
+    <option value="">Loading…</option>
+  </select>
+  <span style="font-size: 0.75rem; color: var(--muted);" title="Higher RPD = more uploads per day on free tier. 2.5-flash = better extraction quality but 20 RPD. 2.5-flash-lite = slightly lower quality but 1,500 RPD.">ⓘ</span>
+</div>
+
 <label class="drop" id="drop">
   <input type="file" id="file" accept="application/pdf,image/*" />
   <div>📄 Drag a file here or click to choose</div>
@@ -268,12 +276,22 @@ const setStatus = (msg, isErr = false, isOk = false) => {
 let taxExemptions = [];
 let availableTaxes = []; // [{id, name, percentage}]
 
+// Persist model choice across sessions
+const MODEL_KEY = 'invoiceUploader.model';
+function getStoredModel() {
+  try { return localStorage.getItem(MODEL_KEY) || ''; } catch (e) { return ''; }
+}
+function setStoredModel(m) {
+  try { localStorage.setItem(MODEL_KEY, m); } catch (e) { /* ignore */ }
+}
+
 (async () => {
   try {
-    const [accRes, exRes, taxRes] = await Promise.all([
+    const [accRes, exRes, taxRes, modelRes] = await Promise.all([
       fetch(`${WORKER_URL}/accounts`),
       fetch(`${WORKER_URL}/tax-exemptions`),
       fetch(`${WORKER_URL}/taxes`),
+      fetch(`${WORKER_URL}/models`),
     ]);
     const { accounts } = await accRes.json();
     const sel = $('account_id');
@@ -287,6 +305,21 @@ let availableTaxes = []; // [{id, name, percentage}]
     taxExemptions = exData.exemptions || [];
     const taxData = await taxRes.json();
     availableTaxes = taxData.taxes || [];
+
+    // Populate model picker
+    const modelData = await modelRes.json();
+    const picker = $('model_picker');
+    picker.innerHTML = '';
+    (modelData.models || []).forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      picker.appendChild(opt);
+    });
+    const stored = getStoredModel();
+    const initial = stored && (modelData.models || []).includes(stored) ? stored : (modelData.default || (modelData.models || [])[0] || '');
+    if (initial) picker.value = initial;
+    picker.addEventListener('change', () => setStoredModel(picker.value));
   } catch (e) { console.error('Failed to load settings', e); }
 })();
 
@@ -319,7 +352,12 @@ async function handleFile(file) {
     const res = await fetch(`${WORKER_URL}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileBase64: base64, mimeType: file.type, kind: currentKind }),
+      body: JSON.stringify({
+        fileBase64: base64,
+        mimeType: file.type,
+        kind: currentKind,
+        model: $('model_picker').value || undefined,
+      }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
