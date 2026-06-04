@@ -265,13 +265,15 @@ const setStatus = (msg, isErr = false, isOk = false) => {
   s.classList.toggle('ok', isOk);
 };
 
-let taxExemptions = []; // populated on load
+let taxExemptions = [];
+let availableTaxes = []; // [{id, name, percentage}]
 
 (async () => {
   try {
-    const [accRes, exRes] = await Promise.all([
+    const [accRes, exRes, taxRes] = await Promise.all([
       fetch(`${WORKER_URL}/accounts`),
       fetch(`${WORKER_URL}/tax-exemptions`),
+      fetch(`${WORKER_URL}/taxes`),
     ]);
     const { accounts } = await accRes.json();
     const sel = $('account_id');
@@ -283,7 +285,9 @@ let taxExemptions = []; // populated on load
     });
     const exData = await exRes.json();
     taxExemptions = exData.exemptions || [];
-  } catch (e) { console.error('Failed to load accounts/exemptions', e); }
+    const taxData = await taxRes.json();
+    availableTaxes = taxData.taxes || [];
+  } catch (e) { console.error('Failed to load settings', e); }
 })();
 
 document.querySelectorAll('.kind-switch button').forEach((b) => {
@@ -396,12 +400,33 @@ function addLineRow(li = {}) {
     <td><input class="li-qty" type="number" step="any" value="${qty}" style="width:55px" /></td>
     <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:75px" /></td>
     <td><input class="li-amount" type="number" step="any" value="${(+baseAmount).toFixed(2)}" style="width:85px" title="Pre-tax line total. Edit to override Qty × Rate." /></td>
-    <td><input class="li-tax" type="number" step="any" value="${taxPercent}" style="width:55px" /></td>
+    <td><select class="li-tax" style="width:100px; font-size: 0.85rem" title="Pick a tax from your Zoho org"><option value="0">0% (exempt)</option></select></td>
     <td><select class="li-exempt" style="width:100px; font-size: 0.8rem; display:none" title="Required when Tax % is 0"><option value="">— select —</option></select></td>
     <td><input class="li-incl" type="number" step="any" value="${inclTax.toFixed(2)}" style="width:85px; background: #f5f5f0" readonly title="Auto-calculated: Amount + tax" /></td>
     <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
   `;
   document.querySelector('#lines tbody').appendChild(tr);
+
+  // Populate the tax dropdown with rates available in Zoho
+  const taxSelect = tr.querySelector('.li-tax');
+  availableTaxes.forEach((t) => {
+    const opt = document.createElement('option');
+    opt.value = String(t.percentage);
+    opt.textContent = `${t.percentage}% — ${t.name}`;
+    opt.dataset.taxId = t.id;
+    taxSelect.appendChild(opt);
+  });
+  // Pre-select the extracted percentage if it matches a known rate, else default to 0
+  const wantedPct = parseFloat(taxPercent);
+  const matchOption = [...taxSelect.options].find((o) => parseFloat(o.value) === wantedPct);
+  if (matchOption) {
+    taxSelect.value = matchOption.value;
+  } else if (wantedPct > 0) {
+    // The extracted rate isn't in Zoho — fall back to 0 and warn via title
+    taxSelect.value = '0';
+    taxSelect.style.borderColor = 'var(--amber)';
+    taxSelect.title = `Extracted rate (${wantedPct}%) is not configured in your Zoho org. Picked 0% — adjust manually.`;
+  }
 
   // Populate the exemption dropdown — no default; user must pick
   const exemptSelect = tr.querySelector('.li-exempt');
@@ -412,7 +437,7 @@ function addLineRow(li = {}) {
     exemptSelect.appendChild(opt);
   });
   // Show/hide based on initial tax %
-  exemptSelect.style.display = (parseFloat(taxPercent) || 0) === 0 ? '' : 'none';
+  exemptSelect.style.display = (parseFloat(taxSelect.value) || 0) === 0 ? '' : 'none';
 
   const qtyInput = tr.querySelector('.li-qty');
   const rateInput = tr.querySelector('.li-rate');
@@ -436,6 +461,8 @@ function addLineRow(li = {}) {
   };
   const onAmtTaxChange = () => {
     updateIncl();
+    // Clear any amber warning border on the tax select
+    taxInput.style.borderColor = '';
     // Show exemption dropdown only when tax is 0
     exemptSelect.style.display = (parseFloat(taxInput.value) || 0) === 0 ? '' : 'none';
     recomputeTotals();
