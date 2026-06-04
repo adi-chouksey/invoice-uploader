@@ -701,6 +701,8 @@ $('push').onclick = async () => {
     [currentKind === 'bill' ? 'bill_date' : 'date']: $('document_date').value,
     due_date: $('due_date').value || undefined,
     line_items: lines,
+    // Internal field: worker uses this to pick GST vs IGST. Stripped before sending to Zoho.
+    _party_gstin: $('party_gstin').value.trim().toUpperCase() || undefined,
   };
 
   if (currentKind === 'bill') {
