@@ -1,548 +1,856 @@
-// ==========================================================================
-// Invoice → Zoho Books uploader — single-file worker for Cloudflare dashboard
-// v2: auto-creates missing contacts, strips undefined values, better errors
-// ==========================================================================
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Invoice → Zoho Books</title>
+<style>
+  :root {
+    --green: #1F6B2E;
+    --red: #D93B2A;
+    --amber: #B07300;
+    --bg: #fafaf7;
+    --border: #e5e5e0;
+    --text: #1a1a1a;
+    --muted: #666;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    max-width: 1400px; margin-inline: auto;
+  }
+  h1 { color: var(--green); margin-top: 0; }
+  .kind-switch { display: flex; gap: 0.5rem; margin-bottom: 1rem; max-width: 700px; }
+  .kind-switch button {
+    flex: 1; padding: 0.75rem; border: 2px solid var(--border); background: white;
+    border-radius: 8px; cursor: pointer; font-size: 1rem;
+  }
+  .kind-switch button.active { border-color: var(--green); background: var(--green); color: white; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 2rem;
+    text-align: center; background: white; cursor: pointer; transition: 0.15s;
+    max-width: 700px;
+  }
+  .drop.over { border-color: var(--green); background: #f0f7f0; }
+  .drop input { display: none; }
+  .status { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: white; border: 1px solid var(--border); }
+  .status.err { border-color: var(--red); color: var(--red); }
+  .status.ok { border-color: var(--green); color: var(--green); }
 
-const ALLOWED_ORIGIN = '*'; // tighten to your GitHub Pages URL when ready
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
 
-const cors = {
-  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-App-Secret',
+  .form, .preview { background: white; padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border); }
+  .form h2, .preview h2 { margin-top: 0; font-size: 1.1rem; }
+  .preview { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: hidden; display: flex; flex-direction: column; }
+  .preview-body { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: #f5f5f0; min-height: 400px; }
+  .preview-body iframe, .preview-body img { width: 100%; height: 100%; min-height: 400px; border: 0; display: block; object-fit: contain; background: white; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .req { color: var(--red); }
+  input, select, textarea {
+    width: 100%; padding: 0.5rem; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 0.95rem; font-family: inherit;
+  }
+  table { width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: #f5f5f0; }
+  td input { padding: 0.3rem; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  .btn { padding: 0.6rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+  .btn-primary { background: var(--green); color: white; }
+  .btn-secondary { background: white; color: var(--text); border: 1px solid var(--border); }
+  .totals { margin-top: 0.75rem; text-align: right; font-size: 1rem; }
+  .totals strong { color: var(--green); }
+
+  .vendor-panel {
+    background: #fff8e6; border: 1px solid var(--amber); border-radius: 8px;
+    padding: 1rem; margin-top: 0.75rem;
+  }
+  .vendor-panel h3 { margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--amber); }
+  .vendor-panel .hint { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+
+  .contact-row { display: flex; gap: 0.5rem; align-items: end; }
+  .contact-row > div:first-child { flex: 1; }
+  .contact-results { margin-top: 0.5rem; font-size: 0.9rem; }
+  details summary { cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>Invoice → Zoho Books</h1>
+<p style="color: var(--muted); margin-top: 0.25rem">Drop a PDF or image. Extracted data is shown for review before pushing to Zoho.</p>
+
+<div class="kind-switch">
+  <button id="kind-bill" class="active" data-kind="bill">Vendor bill (expense)</button>
+  <button id="kind-invoice" data-kind="invoice">Sales invoice (revenue)</button>
+</div>
+
+<div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; max-width: 700px;">
+  <label style="font-size: 0.85rem; color: var(--muted); margin: 0; white-space: nowrap;">Extraction model:</label>
+  <select id="model_picker" style="flex: 1; padding: 0.4rem 0.5rem; font-size: 0.85rem;">
+    <option value="">Loading…</option>
+  </select>
+  <span style="font-size: 0.75rem; color: var(--muted);" title="Higher RPD = more uploads per day on free tier. 2.5-flash = better extraction quality but 20 RPD. 2.5-flash-lite = slightly lower quality but 1,500 RPD.">ⓘ</span>
+</div>
+
+<label class="drop" id="drop">
+  <input type="file" id="file" accept="application/pdf,image/*" />
+  <div>📄 Drag a file here or click to choose</div>
+  <div style="font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem">PDF or image, one at a time</div>
+</label>
+
+<details style="margin-top: 1rem; background: white; padding: 1rem 1.25rem; border-radius: 12px; border: 1px solid var(--border); max-width: 900px;">
+  <summary style="font-weight: 600; color: var(--green);">➕ Add vendor or customer manually</summary>
+  <div style="margin-top: 1rem">
+    <div class="grid">
+      <div>
+        <label>Contact type <span class="req">*</span></label>
+        <select id="mnv_type">
+          <option value="vendor">Vendor (supplier)</option>
+          <option value="customer">Customer</option>
+        </select>
+      </div>
+      <div>
+        <label>Name <span class="req">*</span></label>
+        <input id="mnv_name" placeholder="e.g. Garon Foods Pvt Ltd" />
+      </div>
+      <div>
+        <label>GST Treatment <span class="req">*</span></label>
+        <select id="mnv_gst_treatment">
+          <option value="">— select —</option>
+          <option value="business_gst">Registered Business — Regular</option>
+          <option value="business_none">Unregistered Business</option>
+          <option value="consumer">Consumer</option>
+          <option value="overseas">Overseas</option>
+          <option value="sez">SEZ</option>
+          <option value="deemed_export">Deemed Export</option>
+        </select>
+      </div>
+      <div id="mnv_gst_no_wrap" style="display: none">
+        <label>GSTIN <span class="req">*</span></label>
+        <input id="mnv_gst_no" maxlength="15" style="text-transform: uppercase" />
+      </div>
+      <div>
+        <label>Primary contact first name</label>
+        <input id="mnv_first_name" placeholder="optional" />
+      </div>
+      <div>
+        <label>Primary contact last name</label>
+        <input id="mnv_last_name" placeholder="optional" />
+      </div>
+      <div style="grid-column: 1 / -1">
+        <label>Primary contact email</label>
+        <input id="mnv_email" type="email" placeholder="optional" />
+      </div>
+    </div>
+    <div style="margin-top: 1rem">
+      <button class="btn btn-primary" id="mnv_save">Create in Zoho</button>
+      <span id="mnv_status" style="margin-left: 1rem; font-size: 0.9rem"></span>
+    </div>
+  </div>
+</details>
+
+<div id="status" class="status" hidden></div>
+
+<div id="split" class="split" hidden>
+  <div class="form">
+    <h2 id="form-title">Review extracted data</h2>
+
+    <div class="contact-row">
+      <div>
+        <label id="party-label">Vendor</label>
+        <input id="party_name" />
+      </div>
+      <div style="flex: 0 0 auto">
+        <label>&nbsp;</label>
+        <button class="btn btn-secondary" id="lookup">Lookup in Zoho</button>
+      </div>
+    </div>
+    <div id="contact-results" class="contact-results"></div>
+
+    <div id="inline-vendor-panel" class="vendor-panel" style="display: none">
+      <h3 id="ivp_title">Vendor not found in Zoho</h3>
+      <div class="hint">If this is really a new vendor, fill in the details and click <strong>Create vendor &amp; use</strong>. If the vendor might already exist under a different name (e.g. legal name vs trade name), click <strong>Cancel</strong>, edit the Vendor field above, and click <strong>Lookup in Zoho</strong> again.</div>
+      <div class="grid">
+        <div>
+          <label>GST Treatment <span class="req">*</span></label>
+          <select id="ivp_gst_treatment">
+            <option value="">— select —</option>
+            <option value="business_gst">Registered Business — Regular</option>
+            <option value="business_none">Unregistered Business</option>
+            <option value="consumer">Consumer</option>
+            <option value="overseas">Overseas</option>
+            <option value="sez">SEZ</option>
+            <option value="deemed_export">Deemed Export</option>
+          </select>
+        </div>
+        <div id="ivp_gst_no_wrap" style="display: none">
+          <label>GSTIN <span class="req">*</span></label>
+          <input id="ivp_gst_no" maxlength="15" style="text-transform: uppercase" />
+        </div>
+        <div>
+          <label>Primary contact first name</label>
+          <input id="ivp_first_name" placeholder="optional" />
+        </div>
+        <div>
+          <label>Primary contact last name</label>
+          <input id="ivp_last_name" placeholder="optional" />
+        </div>
+        <div style="grid-column: 1 / -1">
+          <label>Primary contact email</label>
+          <input id="ivp_email" type="email" placeholder="optional" />
+        </div>
+      </div>
+      <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <button class="btn btn-primary" id="ivp_save">Create vendor &amp; use</button>
+        <button class="btn btn-secondary" id="ivp_cancel">Cancel — try different name</button>
+        <span id="ivp_status" style="margin-left: 0.5rem; font-size: 0.9rem"></span>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 1rem">
+      <div><label>Document number</label><input id="document_number" /></div>
+      <div><label>Party GSTIN</label><input id="party_gstin" style="text-transform: uppercase" /></div>
+      <div><label>Date</label><input id="document_date" type="date" /></div>
+      <div><label>Due date</label><input id="due_date" type="date" /></div>
+      <div><label>Currency</label><input id="currency" value="INR" /></div>
+      <div style="grid-column: 1 / -1">
+        <label>Account (applied to all line items) <span class="req">*</span></label>
+        <select id="account_id"><option value="">— select account —</option></select>
+      </div>
+    </div>
+
+    <table id="lines">
+      <thead><tr><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Tax %</th><th>Exempt.</th><th>Incl. tax</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button class="btn btn-secondary" id="add-line" style="margin-top: 0.5rem">+ Add line</button>
+
+    <div class="totals">
+      Subtotal: <span id="subtotal">0</span> &nbsp;|&nbsp;
+      Tax: <span id="tax">0</span> &nbsp;|&nbsp;
+      <strong>Total: <span id="total">0</span></strong>
+    </div>
+
+    <div class="actions">
+      <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.9rem; margin: 0;">
+        <input type="checkbox" id="attach_file" checked style="width: auto; margin: 0;" />
+        Attach this file to the bill in Zoho
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="push">Push to Zoho Books</button>
+      <button class="btn btn-secondary" id="reset">Cancel</button>
+    </div>
+  </div>
+
+  <div class="preview">
+    <h2>Original file</h2>
+    <div class="preview-body" id="preview-body">
+      <div style="padding: 2rem; color: var(--muted); text-align: center">Loading preview…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const WORKER_URL = 'https://zoho-invoice-uploader.adi-chouksey.workers.dev';
+
+let currentKind = 'bill';
+let contactId = null;
+let currentFile = null;
+let currentFileBase64 = null;
+let currentMimeType = null;
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (msg, isErr = false, isOk = false) => {
+  const s = $('status');
+  s.hidden = false;
+  s.textContent = msg;
+  s.classList.toggle('err', isErr);
+  s.classList.toggle('ok', isOk);
 };
 
-const json = (data, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...cors },
+// Treatments that need a GSTIN field shown in the UI.
+// business_gst → required Indian GSTIN (state code 01-38).
+// overseas → optional OIDAR GSTIN (starts with 99) for foreign service providers like Apple Ireland.
+const GST_TREATMENTS_WITH_GSTIN = ['business_gst', 'overseas'];
+
+// Given an uppercased GSTIN, suggest the right treatment.
+// Returns null if the GSTIN is incomplete or unrecognizable.
+function inferGstTreatment(gstin) {
+  if (!gstin || !/^[0-9A-Z]{15}$/.test(gstin)) return null;
+  if (gstin.startsWith('99')) return 'overseas';
+  const stateCode = parseInt(gstin.substring(0, 2), 10);
+  if (stateCode >= 1 && stateCode <= 38) return 'business_gst';
+  return null;
+}
+
+let taxExemptions = [];
+let availableTaxes = []; // [{id, name, percentage}]
+
+// Persist model choice across sessions
+const MODEL_KEY = 'invoiceUploader.model';
+function getStoredModel() {
+  try { return localStorage.getItem(MODEL_KEY) || ''; } catch (e) { return ''; }
+}
+function setStoredModel(m) {
+  try { localStorage.setItem(MODEL_KEY, m); } catch (e) { /* ignore */ }
+}
+
+(async () => {
+  try {
+    const [accRes, exRes, taxRes, modelRes] = await Promise.all([
+      fetch(`${WORKER_URL}/accounts`),
+      fetch(`${WORKER_URL}/tax-exemptions`),
+      fetch(`${WORKER_URL}/taxes`),
+      fetch(`${WORKER_URL}/models`),
+    ]);
+    const { accounts } = await accRes.json();
+    const sel = $('account_id');
+    accounts.forEach((a) => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.kind})`;
+      sel.appendChild(opt);
+    });
+    const exData = await exRes.json();
+    taxExemptions = exData.exemptions || [];
+    const taxData = await taxRes.json();
+    availableTaxes = taxData.taxes || [];
+
+    // Populate model picker
+    const modelData = await modelRes.json();
+    const picker = $('model_picker');
+    picker.innerHTML = '';
+    (modelData.models || []).forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      picker.appendChild(opt);
+    });
+    const stored = getStoredModel();
+    const initial = stored && (modelData.models || []).includes(stored) ? stored : (modelData.default || (modelData.models || [])[0] || '');
+    if (initial) picker.value = initial;
+    picker.addEventListener('change', () => setStoredModel(picker.value));
+  } catch (e) { console.error('Failed to load settings', e); }
+})();
+
+document.querySelectorAll('.kind-switch button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('.kind-switch button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    currentKind = b.dataset.kind;
+    $('party-label').textContent = currentKind === 'bill' ? 'Vendor' : 'Customer';
+    contactId = null;
+    $('inline-vendor-panel').style.display = 'none';
+    $('contact-results').innerHTML = '';
+  };
+});
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (ev) => { const f = ev.dataTransfer.files[0]; if (f) handleFile(f); });
+$('file').onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+
+async function handleFile(file) {
+  currentFile = file;
+  currentMimeType = file.type;
+  setStatus(`Extracting from ${file.name}…`);
+  try {
+    const base64 = await fileToBase64(file);
+    currentFileBase64 = base64;
+    renderPreview(file);
+    const res = await fetch(`${WORKER_URL}/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileBase64: base64,
+        mimeType: file.type,
+        kind: currentKind,
+        model: $('model_picker').value || undefined,
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    setStatus('Extracted. Review and edit before pushing.', false, true);
+    populateForm(data);
+    if (data.party_name) doLookup();
+  } catch (e) {
+    setStatus(`Extraction failed: ${e.message}`, true);
+  }
+}
+
+function renderPreview(file) {
+  const body = $('preview-body');
+  const url = URL.createObjectURL(file);
+  if (file.type === 'application/pdf') {
+    body.innerHTML = `<iframe src="${url}#toolbar=0&navpanes=0"></iframe>`;
+  } else if (file.type.startsWith('image/')) {
+    body.innerHTML = `<img src="${url}" alt="invoice preview" />`;
+  } else {
+    body.innerHTML = `<div style="padding: 2rem; color: var(--muted); text-align: center">Preview not available for this file type.</div>`;
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
   });
+}
 
-// ---------- Gemini extraction ----------
+function populateForm(d) {
+  $('split').hidden = false;
+  $('form-title').textContent = currentKind === 'bill' ? 'Review vendor bill' : 'Review sales invoice';
+  $('party_name').value = d.party_name || '';
+  $('party_gstin').value = (d.party_gstin || '').toUpperCase();
+  $('document_number').value = d.document_number || '';
+  $('document_date').value = d.document_date || '';
+  $('due_date').value = d.due_date || '';
+  $('currency').value = d.currency || 'INR';
+  contactId = null;
+  $('contact-results').innerHTML = '';
+  $('inline-vendor-panel').style.display = 'none';
 
-// Allowed models — prevents arbitrary model strings from being sent to Google.
-const ALLOWED_GEMINI_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite',
-  'gemini-flash-latest',
-];
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
-const geminiEndpoint = (model) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const tbody = document.querySelector('#lines tbody');
+  tbody.innerHTML = '';
+  (d.line_items || []).forEach(addLineRow);
+  if (!tbody.children.length) addLineRow({});
+  recomputeTotals();
+}
 
-const SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    party_name: { type: 'STRING' },
-    party_gstin: { type: 'STRING' },
-    document_number: { type: 'STRING' },
-    document_date: { type: 'STRING' },
-    due_date: { type: 'STRING' },
-    currency: { type: 'STRING' },
-    line_items: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          description: { type: 'STRING' },
-          hsn_sac: { type: 'STRING' },
-          quantity: { type: 'NUMBER' },
-          unit: { type: 'STRING' },
-          rate: { type: 'NUMBER', description: 'Per-unit pre-tax price. Omit if invoice does not show per-unit rate (e.g. lump sum charges).' },
-          taxable_value: { type: 'NUMBER', description: 'Pre-tax line total (the taxable portion of this line).' },
-          non_taxable_value: { type: 'NUMBER', description: 'Non-taxable / exempt portion of this line, if any.' },
-          amount: { type: 'NUMBER', description: 'The pre-tax line total. For taxable lines = taxable_value. For non-taxable lines = non_taxable_value. Must NOT include tax.' },
-          tax_percent: { type: 'NUMBER', description: 'Tax rate as percentage. 0 for non-taxable/exempt lines.' },
-        },
-        required: ['description', 'amount'],
-      },
-    },
-    subtotal: { type: 'NUMBER' },
-    cgst: { type: 'NUMBER' },
-    sgst: { type: 'NUMBER' },
-    igst: { type: 'NUMBER' },
-    total: { type: 'NUMBER' },
-    notes: { type: 'STRING' },
-  },
-  required: ['party_name', 'document_number', 'document_date', 'total', 'line_items'],
-};
+function addLineRow(li = {}) {
+  const tr = document.createElement('tr');
+  const taxPercent = li.tax_percent ?? 18;
 
-async function extractInvoice(env, fileBase64, mimeType, kind, model) {
-  const useModel = ALLOWED_GEMINI_MODELS.includes(model) ? model : DEFAULT_GEMINI_MODEL;
-  const partyHint = kind === 'bill'
-    ? 'This is a vendor bill we received. Identify the VENDOR as party_name.'
-    : 'This is a sales invoice we issued. Identify the CUSTOMER as party_name.';
+  // Three possible cases from extraction:
+  //   1. rate is given → use qty × rate
+  //   2. rate missing but amount given → treat as lump sum (qty=1, rate=amount)
+  //   3. nothing useful → blank row, user fills it in
+  let qty = li.quantity ?? 1;
+  let rate;
+  if (li.rate !== undefined && li.rate !== null && li.rate > 0) {
+    rate = li.rate;
+  } else if (li.amount !== undefined && li.amount !== null) {
+    // Lump sum: collapse to qty=1, rate=amount
+    qty = 1;
+    rate = li.amount;
+  } else {
+    rate = 0;
+  }
+  const baseAmount = qty * rate;
+  const inclTax = baseAmount * (1 + taxPercent / 100);
 
-  const prompt = `Extract structured data from this ${kind === 'bill' ? 'vendor bill' : 'sales invoice'}.
-${partyHint}
+  tr.innerHTML = `
+    <td><input class="li-desc" value="${esc(li.description)}" /></td>
+    <td><input class="li-hsn" value="${esc(li.hsn_sac)}" style="width:80px" /></td>
+    <td><input class="li-qty" type="number" step="any" value="${qty}" style="width:55px" /></td>
+    <td><input class="li-rate" type="number" step="any" value="${rate}" style="width:75px" /></td>
+    <td><input class="li-amount" type="number" step="any" value="${(+baseAmount).toFixed(2)}" style="width:85px" title="Pre-tax line total. Edit to override Qty × Rate." /></td>
+    <td><select class="li-tax" style="width:100px; font-size: 0.85rem" title="Pick a tax from your Zoho org"><option value="0">0% (exempt)</option></select></td>
+    <td><select class="li-exempt" style="width:100px; font-size: 0.8rem; display:none" title="Required when Tax % is 0"><option value="">— select —</option></select></td>
+    <td><input class="li-incl" type="number" step="any" value="${inclTax.toFixed(2)}" style="width:85px; background: #f5f5f0" readonly title="Auto-calculated: Amount + tax" /></td>
+    <td><button class="btn btn-secondary li-del" style="padding:0.2rem 0.5rem">×</button></td>
+  `;
+  document.querySelector('#lines tbody').appendChild(tr);
 
-CRITICAL extraction rules:
-- Dates must be in YYYY-MM-DD format.
-- Numbers must be plain numbers (no currency symbols, no thousands separators).
-- For each line_item, "amount" MUST be the PRE-TAX line total (taxable_value + non_taxable_value, NOT the total-including-tax column).
-- If a line has only a Non-Taxable / Exempt value with no Taxable value (e.g. airport charges, exempt items), set tax_percent to 0 and amount to the non-taxable value.
-- If the invoice does not show a per-unit rate (lump sum charges), omit "rate" entirely and set quantity to 1.
-- For Indian invoices: capture GSTIN, HSN/SAC codes. tax_percent is the SUM of CGST+SGST (for intra-state) or IGST (for inter-state). E.g. CGST 2.5% + SGST 2.5% → tax_percent: 5.
-- If a field is not present, omit it (do not invent values).`;
+  // Populate the tax dropdown with rates available in Zoho
+  const taxSelect = tr.querySelector('.li-tax');
+  availableTaxes.forEach((t) => {
+    const opt = document.createElement('option');
+    opt.value = String(t.percentage);
+    opt.textContent = `${t.percentage}% — ${t.name}`;
+    opt.dataset.taxId = t.id;
+    taxSelect.appendChild(opt);
+  });
+  // Pre-select the extracted percentage if it matches a known rate, else default to 0
+  const wantedPct = parseFloat(taxPercent);
+  const matchOption = [...taxSelect.options].find((o) => parseFloat(o.value) === wantedPct);
+  if (matchOption) {
+    taxSelect.value = matchOption.value;
+  } else if (wantedPct > 0) {
+    // The extracted rate isn't in Zoho — fall back to 0 and warn via title
+    taxSelect.value = '0';
+    taxSelect.style.borderColor = 'var(--amber)';
+    taxSelect.title = `Extracted rate (${wantedPct}%) is not configured in your Zoho org. Picked 0% — adjust manually.`;
+  }
 
-  const body = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inline_data: { mime_type: mimeType, data: fileBase64 } },
-      ],
-    }],
-    generationConfig: {
-      response_mime_type: 'application/json',
-      response_schema: SCHEMA,
-      temperature: 0,
-    },
+  // Populate the exemption dropdown — no default; user must pick
+  const exemptSelect = tr.querySelector('.li-exempt');
+  taxExemptions.forEach((ex) => {
+    const opt = document.createElement('option');
+    opt.value = ex.tax_exemption_code || ex.exemption_reason || ex.name;
+    opt.textContent = ex.tax_exemption_code || ex.exemption_reason || ex.name;
+    exemptSelect.appendChild(opt);
+  });
+  // Show/hide based on initial tax %
+  exemptSelect.style.display = (parseFloat(taxSelect.value) || 0) === 0 ? '' : 'none';
+
+  const qtyInput = tr.querySelector('.li-qty');
+  const rateInput = tr.querySelector('.li-rate');
+  const amtInput = tr.querySelector('.li-amount');
+  const taxInput = tr.querySelector('.li-tax');
+  const inclInput = tr.querySelector('.li-incl');
+
+  // When qty or rate changes → recompute Amount (pre-tax), then Incl. tax
+  const onQtyRateChange = () => {
+    const q = parseFloat(qtyInput.value) || 0;
+    const r = parseFloat(rateInput.value) || 0;
+    amtInput.value = (q * r).toFixed(2);
+    updateIncl();
+    recomputeTotals();
+  };
+  // When Amount or Tax % changes → recompute Incl. tax only (don't touch qty/rate)
+  const updateIncl = () => {
+    const a = parseFloat(amtInput.value) || 0;
+    const tp = parseFloat(taxInput.value) || 0;
+    inclInput.value = (a * (1 + tp / 100)).toFixed(2);
+  };
+  const onAmtTaxChange = () => {
+    updateIncl();
+    // Clear any amber warning border on the tax select
+    taxInput.style.borderColor = '';
+    // Show exemption dropdown only when tax is 0
+    exemptSelect.style.display = (parseFloat(taxInput.value) || 0) === 0 ? '' : 'none';
+    recomputeTotals();
   };
 
-  const res = await fetch(`${geminiEndpoint(useModel)}?key=${env.GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+  qtyInput.addEventListener('input', onQtyRateChange);
+  rateInput.addEventListener('input', onQtyRateChange);
+  amtInput.addEventListener('input', onAmtTaxChange);
+  taxInput.addEventListener('input', onAmtTaxChange);
+
+  tr.querySelector('.li-del').onclick = () => { tr.remove(); recomputeTotals(); };
+}
+function esc(s) { return (s ?? '').toString().replace(/"/g, '&quot;'); }
+
+$('add-line').onclick = () => addLineRow({});
+
+function recomputeTotals() {
+  let sub = 0, tax = 0;
+  document.querySelectorAll('#lines tbody tr').forEach((tr) => {
+    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
+    const tp = parseFloat(tr.querySelector('.li-tax').value) || 0;
+    sub += amt;
+    tax += amt * (tp / 100);
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gemini error ${res.status}: ${text}`);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned no content');
-  return JSON.parse(text);
+  $('subtotal').textContent = sub.toFixed(2);
+  $('tax').textContent = tax.toFixed(2);
+  $('total').textContent = (sub + tax).toFixed(2);
 }
 
-// ---------- Zoho Books (India DC) ----------
-
-const ZOHO_ACCOUNTS = 'https://accounts.zoho.in';
-const ZOHO_API = 'https://www.zohoapis.in/books/v3';
-
-async function getAccessToken(env) {
-  const params = new URLSearchParams({
-    refresh_token: env.ZOHO_REFRESH_TOKEN,
-    client_id: env.ZOHO_CLIENT_ID,
-    client_secret: env.ZOHO_CLIENT_SECRET,
-    grant_type: 'refresh_token',
-  });
-
-  const res = await fetch(`${ZOHO_ACCOUNTS}/oauth/v2/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-
-  const data = await res.json();
-  if (!data.access_token) throw new Error(`Zoho OAuth failed: ${JSON.stringify(data)}`);
-  return data.access_token;
-}
-
-async function zohoFetch(env, path, opts = {}) {
-  const token = await getAccessToken(env);
-  const url = new URL(`${ZOHO_API}${path}`);
-  url.searchParams.set('organization_id', env.ZOHO_ORG_ID);
-
-  const res = await fetch(url.toString(), {
-    ...opts,
-    headers: {
-      Authorization: `Zoho-oauthtoken ${token}`,
-      'Content-Type': 'application/json',
-      ...(opts.headers || {}),
-    },
-  });
-
-  const data = await res.json();
-  if (!res.ok || (data.code !== undefined && data.code !== 0)) {
-    // Surface the request body too so we can see what we sent
-    const sentBody = opts.body ? ` | sent: ${opts.body}` : '';
-    throw new Error(`Zoho API ${res.status}: ${data.message || JSON.stringify(data)}${sentBody}`);
-  }
-  return data;
-}
-
-async function searchContact(env, name, type) {
-  const path = `/contacts?contact_name_contains=${encodeURIComponent(name)}&contact_type=${type}`;
-  const data = await zohoFetch(env, path);
-  return data.contacts || [];
-}
-
-async function createContact(env, contactPayload) {
-  // contactPayload is a Zoho Books contact object.
-  // Required: contact_name, contact_type ('vendor' or 'customer').
-  // For Indian orgs with GST: gst_treatment is required.
-  //   'business_gst' → gst_no is also required (15 char GSTIN)
-  //   'business_none' / 'consumer' / 'overseas' → no gst_no needed
-  // Optional: contact_persons array with first_name, last_name, email.
-  const data = await zohoFetch(env, '/contacts', {
-    method: 'POST',
-    body: JSON.stringify(contactPayload),
-  });
-  return data.contact;
-}
-
-// Build a contact payload from form fields, with India GST validation.
-function buildContactPayload({ name, type, gst_treatment, gst_no, first_name, last_name, email }) {
-  if (!name) throw new Error('Vendor/customer name is required');
-  if (!type) throw new Error('Contact type is required');
-
-  // Normalize GSTIN before any logic uses it
-  if (gst_no) gst_no = gst_no.toUpperCase().trim();
-
-  // Auto-correct: GSTINs starting with "99" are OIDAR / non-resident foreign
-  // service providers (e.g. Apple Ireland, Google Cloud, Microsoft Ireland).
-  // They have no Indian state code, so Zoho rejects business_gst treatment
-  // with "Please provide a valid state code". Force overseas treatment.
-  if (gst_no && gst_no.startsWith('99') && gst_treatment === 'business_gst') {
-    gst_treatment = 'overseas';
-  }
-
-  if (!gst_treatment) throw new Error('GST Treatment is required');
-
-  const validTreatments = ['business_gst', 'business_none', 'overseas', 'consumer', 'deemed_export', 'sez', 'sez_developer'];
-  if (!validTreatments.includes(gst_treatment)) {
-    throw new Error(`Invalid GST Treatment. Must be one of: ${validTreatments.join(', ')}`);
-  }
-
-  if (gst_treatment === 'business_gst' && !gst_no) {
-    throw new Error('GSTIN is required when GST Treatment is "Registered Business"');
-  }
-
-  // 15-char alphanumeric format check applies to any provided GSTIN
-  if (gst_no && !/^[0-9A-Z]{15}$/.test(gst_no)) {
-    throw new Error('GSTIN must be exactly 15 characters (uppercase letters and digits)');
-  }
-
-  // For business_gst, first 2 chars must be a valid Indian state code (01-38).
-  // Catches the case where someone manually selects "Registered Business" but
-  // pastes a 99-prefix OIDAR GSTIN — fails locally with a useful hint before
-  // Zoho returns the generic "valid state code" error.
-  if (gst_treatment === 'business_gst') {
-    const stateCode = parseInt(gst_no.substring(0, 2), 10);
-    if (isNaN(stateCode) || stateCode < 1 || stateCode > 38) {
-      throw new Error(
-        `GSTIN "${gst_no}" starts with "${gst_no.substring(0, 2)}", which is not a valid Indian state code. ` +
-        `If this is a foreign / OIDAR vendor (Apple Ireland, Google, Microsoft, etc.), select "Overseas" as GST Treatment.`
+async function doLookup() {
+  const name = $('party_name').value.trim();
+  if (!name) return;
+  const type = currentKind === 'bill' ? 'vendor' : 'customer';
+  const div = $('contact-results');
+  div.innerHTML = '<em style="color: var(--muted)">Searching Zoho…</em>';
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/search?name=${encodeURIComponent(name)}&type=${type}`);
+    const { contacts } = await res.json();
+    if (!contacts?.length) {
+      div.innerHTML = '';
+      showInlineVendorPanel(name);
+      contactId = null;
+    } else {
+      $('inline-vendor-panel').style.display = 'none';
+      div.innerHTML = '<strong style="color: var(--green)">✓ Matches found — pick one:</strong>' +
+        contacts.slice(0, 5).map((c, i) =>
+          `<label style="display:block; margin: 0.25rem 0; cursor: pointer">
+            <input type="radio" name="contact" value="${c.contact_id}" ${i === 0 ? 'checked' : ''} /> ${esc(c.contact_name)}
+          </label>`
+        ).join('');
+      contactId = contacts[0].contact_id;
+      div.querySelectorAll('input[name=contact]').forEach((r) =>
+        r.addEventListener('change', () => { contactId = r.value; })
       );
     }
+  } catch (err) {
+    div.innerHTML = `<span style="color: var(--red)">Lookup failed: ${esc(err.message)}</span>`;
+  }
+}
+
+$('lookup').onclick = (e) => { e.preventDefault(); doLookup(); };
+
+function showInlineVendorPanel(name) {
+  $('inline-vendor-panel').style.display = '';
+  $('ivp_title').textContent = `⚠️ ${currentKind === 'bill' ? 'Vendor' : 'Customer'} "${name}" not found in Zoho`;
+  const extractedGstin = $('party_gstin').value.trim().toUpperCase();
+  const inferred = inferGstTreatment(extractedGstin);
+  if (inferred) {
+    // Pre-set treatment and GSTIN. inferred is one of business_gst / overseas → both show the GSTIN field.
+    $('ivp_gst_treatment').value = inferred;
+    $('ivp_gst_no_wrap').style.display = '';
+    $('ivp_gst_no').value = extractedGstin;
+  } else {
+    $('ivp_gst_treatment').value = '';
+    $('ivp_gst_no_wrap').style.display = 'none';
+    $('ivp_gst_no').value = '';
+  }
+  $('ivp_status').textContent = '';
+}
+
+$('ivp_gst_treatment').addEventListener('change', (e) => {
+  const show = GST_TREATMENTS_WITH_GSTIN.includes(e.target.value);
+  $('ivp_gst_no_wrap').style.display = show ? '' : 'none';
+  if (!show) $('ivp_gst_no').value = '';
+});
+
+// As the user types/edits the GSTIN, auto-correct the treatment dropdown.
+// E.g. typing "99..." flips treatment to Overseas; typing "23..." flips to Registered Business.
+// Only changes the dropdown if the inferred value differs from current; doesn't override
+// manual selections like SEZ, Deemed Export, etc.
+$('ivp_gst_no').addEventListener('input', (e) => {
+  const gstin = e.target.value.toUpperCase().trim();
+  const inferred = inferGstTreatment(gstin);
+  if (!inferred) return;
+  const tSel = $('ivp_gst_treatment');
+  // Only auto-flip between business_gst <-> overseas, since those are the GSTIN-bearing treatments.
+  // Don't overwrite if the user has picked sez / deemed_export / consumer / etc.
+  if (!tSel.value || GST_TREATMENTS_WITH_GSTIN.includes(tSel.value)) {
+    if (tSel.value !== inferred) tSel.value = inferred;
+  }
+});
+
+$('ivp_save').onclick = async (e) => {
+  e.preventDefault();
+  const setIvpStatus = (msg, isErr = false) => {
+    const s = $('ivp_status');
+    s.textContent = msg;
+    s.style.color = isErr ? 'var(--red)' : 'var(--green)';
+  };
+  const payload = {
+    type: currentKind === 'bill' ? 'vendor' : 'customer',
+    name: $('party_name').value.trim(),
+    gst_treatment: $('ivp_gst_treatment').value,
+    gst_no: $('ivp_gst_no').value.trim().toUpperCase(),
+    first_name: $('ivp_first_name').value.trim(),
+    last_name: $('ivp_last_name').value.trim(),
+    email: $('ivp_email').value.trim(),
+  };
+  if (!payload.name) return setIvpStatus('Name is required (top field)', true);
+  if (!payload.gst_treatment) return setIvpStatus('GST Treatment is required', true);
+  if (payload.gst_treatment === 'business_gst' && !payload.gst_no) {
+    return setIvpStatus('GSTIN is required for Registered Business', true);
+  }
+  setIvpStatus('Creating in Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'create failed');
+    contactId = data.contact.contact_id;
+    setIvpStatus(`✅ Created. Will be used for this ${currentKind}.`);
+    $('contact-results').innerHTML = `<strong style="color: var(--green)">✓ New ${payload.type} created and selected: ${esc(data.contact.contact_name)}</strong>`;
+    // Hide the panel after successful creation since vendor is now resolved
+    setTimeout(() => { $('inline-vendor-panel').style.display = 'none'; }, 1500);
+  } catch (err) {
+    setIvpStatus(`Failed: ${err.message}`, true);
+  }
+};
+
+// Cancel new-vendor creation — user thinks vendor may exist under a different name
+$('ivp_cancel').onclick = (e) => {
+  e.preventDefault();
+  $('inline-vendor-panel').style.display = 'none';
+  $('ivp_status').textContent = '';
+  // Reset just the vendor-panel-specific fields
+  ['ivp_gst_no', 'ivp_first_name', 'ivp_last_name', 'ivp_email'].forEach((id) => ($(id).value = ''));
+  $('ivp_gst_treatment').value = '';
+  $('ivp_gst_no_wrap').style.display = 'none';
+  contactId = null;
+  $('contact-results').innerHTML = '<em style="color: var(--muted)">Edit the Vendor field above and click <strong>Lookup in Zoho</strong> to search again.</em>';
+  $('party_name').focus();
+  $('party_name').select();
+};
+
+$('push').onclick = async () => {
+  const accountId = $('account_id').value;
+  if (!accountId) {
+    setStatus('Please select an account from the "Account" dropdown below the date fields, then push again.', true);
+    // Visually highlight the dropdown
+    const sel = $('account_id');
+    sel.style.borderColor = 'var(--red)';
+    sel.style.boxShadow = '0 0 0 3px rgba(217, 59, 42, 0.15)';
+    sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    sel.focus();
+    sel.addEventListener('change', () => {
+      sel.style.borderColor = '';
+      sel.style.boxShadow = '';
+    }, { once: true });
+    return;
   }
 
-  const payload = {
-    contact_name: name,
-    contact_type: type,
-    gst_treatment,
+  // Validate: every zero-tax line must have an exemption code chosen.
+  const rows = [...document.querySelectorAll('#lines tbody tr')];
+  for (const tr of rows) {
+    const taxPct = parseFloat(tr.querySelector('.li-tax').value) || 0;
+    const exemptSel = tr.querySelector('.li-exempt');
+    if (taxPct === 0 && !exemptSel.value) {
+      setStatus('Pick an exemption reason for every line with 0% tax, then push again.', true);
+      exemptSel.style.borderColor = 'var(--red)';
+      exemptSel.style.boxShadow = '0 0 0 3px rgba(217, 59, 42, 0.15)';
+      exemptSel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      exemptSel.focus();
+      exemptSel.addEventListener('change', () => {
+        exemptSel.style.borderColor = '';
+        exemptSel.style.boxShadow = '';
+      }, { once: true });
+      return;
+    }
+  }
+
+  const lines = rows.map((tr) => {
+    const qty = parseFloat(tr.querySelector('.li-qty').value) || 1;
+    const amt = parseFloat(tr.querySelector('.li-amount').value) || 0;
+    const taxPct = parseFloat(tr.querySelector('.li-tax').value) || 0;
+    const effectiveRate = qty ? amt / qty : 0;
+    const line = {
+      name: tr.querySelector('.li-desc').value,
+      hsn_or_sac: tr.querySelector('.li-hsn').value || undefined,
+      quantity: qty,
+      rate: effectiveRate,
+      tax_percentage: taxPct,
+      account_id: accountId,
+    };
+    if (taxPct === 0) {
+      const exempt = tr.querySelector('.li-exempt').value;
+      if (exempt) line.tax_exemption_code = exempt;
+    }
+    return line;
+  });
+
+  const base = {
+    [currentKind === 'bill' ? 'bill_number' : 'invoice_number']: $('document_number').value,
+    [currentKind === 'bill' ? 'bill_date' : 'date']: $('document_date').value,
+    due_date: $('due_date').value || undefined,
+    line_items: lines,
+    // Internal field: worker uses this to pick GST vs IGST. Stripped before sending to Zoho.
+    _party_gstin: $('party_gstin').value.trim().toUpperCase() || undefined,
   };
 
-  // Send GSTIN for both business_gst and overseas. Omit for other treatments.
-  if (gst_no && (gst_treatment === 'business_gst' || gst_treatment === 'overseas')) {
-    payload.gst_no = gst_no;
-  }
-
-  if (first_name || last_name || email) {
-    payload.contact_persons = [{
-      first_name: first_name || '',
-      last_name: last_name || '',
-      email: email || '',
-      is_primary_contact: true,
-    }];
-  }
-  return payload;
-}
-
-async function ensureContact(env, payload, kind) {
-  const idField = kind === 'bill' ? 'vendor_id' : 'customer_id';
-  const nameField = kind === 'bill' ? 'vendor_name' : 'customer_name';
-  const contactType = kind === 'bill' ? 'vendor' : 'customer';
-
-  if (payload[idField]) return payload;
-
-  const name = payload[nameField];
-  if (!name) throw new Error(`Missing ${nameField} and ${idField}`);
-
-  const matches = await searchContact(env, name, contactType);
-  if (matches.length > 0) {
-    payload[idField] = matches[0].contact_id;
+  if (currentKind === 'bill') {
+    base.vendor_id = contactId || undefined;
+    if (!contactId) base.vendor_name = $('party_name').value;
   } else {
-    // Auto-create a minimal contact when pushing a bill/invoice without a prior selection.
-    // Defaults to 'business_none' (unregistered) to satisfy India GST requirements.
-    // For full vendor setup with GSTIN, use the "Add new vendor" form instead.
-    const created = await createContact(env, {
-      contact_name: name,
-      contact_type: contactType,
-      gst_treatment: 'business_none',
+    base.customer_id = contactId || undefined;
+    if (!contactId) base.customer_name = $('party_name').value;
+  }
+
+  setStatus('Pushing to Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: currentKind, payload: base }),
     });
-    payload[idField] = created.contact_id;
-  }
-  delete payload[nameField];
-  return payload;
-}
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'push failed');
+    const billId = data.bill?.bill_id || data.invoice?.invoice_id;
+    setStatus(`✅ Created in Zoho Books. ID: ${billId}`, false, true);
 
-// Strip undefined / null / empty-string values recursively
-function clean(obj) {
-  if (Array.isArray(obj)) return obj.map(clean);
-  if (obj && typeof obj === 'object') {
-    const out = {};
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === undefined || v === null || v === '') continue;
-      out[k] = clean(v);
+    if ($('attach_file').checked && currentFileBase64 && currentKind === 'bill') {
+      setStatus(`Created bill ${billId}. Attaching original file…`, false, true);
+      try {
+        const ar = await fetch(`${WORKER_URL}/bills/attach`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            billId,
+            fileBase64: currentFileBase64,
+            mimeType: currentMimeType,
+            filename: currentFile?.name || 'invoice',
+          }),
+        });
+        const ad = await ar.json();
+        if (!ar.ok) throw new Error(ad.error || 'attach failed');
+        setStatus(`✅ Bill ${billId} created with attachment.`, false, true);
+      } catch (err) {
+        setStatus(`Bill created (${billId}) but attachment failed: ${err.message}`, true);
+      }
     }
-    return out;
+  } catch (e) {
+    setStatus(`Push failed: ${e.message}`, true);
   }
-  return obj;
-}
-
-function applyDefaultAccount(cleaned, accountId) {
-  if (!accountId) return;
-  cleaned.line_items = (cleaned.line_items || []).map((li) => ({
-    ...li,
-    account_id: li.account_id || accountId,
-  }));
-}
-
-// Cache for tax exemption code → id mapping. Refreshed once per worker invocation.
-let _exemptionMap = null;
-async function getExemptionMap(env) {
-  if (_exemptionMap) return _exemptionMap;
-  const list = await listTaxExemptions(env);
-  _exemptionMap = {};
-  for (const ex of list) {
-    const code = ex.tax_exemption_code || ex.exemption_reason || ex.name;
-    if (code) _exemptionMap[code] = ex.tax_exemption_id;
-  }
-  return _exemptionMap;
-}
-
-// Resolve every line item to either a tax_id (for taxable lines) or a
-// tax_exemption_id (for zero-tax lines).
-// Selects GST vs IGST based on whether the vendor is in the same state as our org.
-async function applyTaxResolution(env, cleaned) {
-  const items = cleaned.line_items || [];
-  const needsExemption = items.some((li) => {
-    const tp = parseFloat(li.tax_percentage);
-    return !tp || tp === 0;
-  });
-  const exemptMap = needsExemption ? await getExemptionMap(env) : {};
-
-  // Determine inter/intra-state from party GSTIN (passed in cleaned._party_gstin) vs org home state.
-  const orgState = env.ZOHO_HOME_STATE_CODE; // e.g. "23" for MP
-  const partyState = gstinStateCode(cleaned._party_gstin);
-  // If we can't determine the party's state (no GSTIN extracted), default to intra-state
-  // since that's the safer assumption for a domestic small-business workflow.
-  const isInterState = orgState && partyState && partyState !== orgState;
-
-  const resolvedItems = [];
-  for (let i = 0; i < items.length; i++) {
-    const li = items[i];
-    const tp = parseFloat(li.tax_percentage);
-    if (tp && tp > 0) {
-      const taxId = await resolveTaxId(env, tp, isInterState);
-      if (!taxId) {
-        throw new Error(`Line ${i + 1} ("${li.name || 'unnamed'}"): no tax record found for ${tp}%. Create one in Zoho Settings → Taxes.`);
-      }
-      const { tax_percentage, tax_exemption_code, tax_exemption_id, ...rest } = li;
-      resolvedItems.push({ ...rest, tax_id: taxId });
-    } else {
-      if (!li.tax_exemption_code && !li.tax_exemption_id) {
-        throw new Error(`Line ${i + 1} ("${li.name || 'unnamed'}") has 0% tax but no exemption reason.`);
-      }
-      let exemptionId = li.tax_exemption_id;
-      if (!exemptionId && li.tax_exemption_code) {
-        exemptionId = exemptMap[li.tax_exemption_code];
-        if (!exemptionId) {
-          throw new Error(`Line ${i + 1}: exemption "${li.tax_exemption_code}" not found. Available: ${Object.keys(exemptMap).join(', ')}`);
-        }
-      }
-      const { tax_percentage, tax_exemption_code, ...rest } = li;
-      resolvedItems.push({ ...rest, tax_exemption_id: exemptionId });
-    }
-  }
-  cleaned.line_items = resolvedItems;
-  // Strip our internal-only field before sending to Zoho
-  delete cleaned._party_gstin;
-}
-
-async function listTaxExemptions(env) {
-  const data = await zohoFetch(env, '/settings/taxexemptions');
-  return data.tax_exemptions || [];
-}
-
-async function listTaxes(env) {
-  const data = await zohoFetch(env, '/settings/taxes');
-  return data.taxes || [];
-}
-
-// Cache for taxes list.
-let _taxList = null;
-async function getTaxList(env) {
-  if (_taxList) return _taxList;
-  _taxList = await listTaxes(env);
-  return _taxList;
-}
-
-// Pick the right tax for a given percentage and transaction type.
-// isInterState=true → prefer IGST*. isInterState=false → prefer GST*/CGST*/SGST*.
-async function resolveTaxId(env, percentage, isInterState) {
-  const taxes = await getTaxList(env);
-  const candidates = taxes.filter((t) => parseFloat(t.tax_percentage) === percentage);
-  if (candidates.length === 0) return null;
-
-  // Heuristic: name starting with "IGST" is inter-state; anything else is intra-state.
-  const inter = candidates.find((t) => /^igst/i.test(t.tax_name));
-  const intra = candidates.find((t) => !/^igst/i.test(t.tax_name));
-
-  if (isInterState) return (inter || intra)?.tax_id || null;
-  return (intra || inter)?.tax_id || null;
-}
-
-// Indian GSTIN first 2 digits = state code (e.g. "23" = MP, "27" = MH, "29" = KA).
-function gstinStateCode(gstin) {
-  if (!gstin || typeof gstin !== 'string') return null;
-  const m = gstin.trim().match(/^(\d{2})/);
-  return m ? m[1] : null;
-}
-
-async function attachToBill(env, billId, fileBase64, mimeType, filename) {
-  // Zoho's attachment endpoint requires multipart/form-data, not JSON.
-  // We construct it manually because Cloudflare Workers' FormData with Blob
-  // sometimes loses the filename. The body is a multipart/form-data buffer.
-  const token = await getAccessToken(env);
-  const url = new URL(`${ZOHO_API}/bills/${billId}/attachment`);
-  url.searchParams.set('organization_id', env.ZOHO_ORG_ID);
-
-  // Decode base64 to bytes
-  const binary = atob(fileBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-  // Build a Blob and FormData
-  const blob = new Blob([bytes], { type: mimeType });
-  const form = new FormData();
-  form.append('attachment', blob, filename);
-
-  const res = await fetch(url.toString(), {
-    method: 'POST',
-    headers: { Authorization: `Zoho-oauthtoken ${token}` },
-    body: form,
-  });
-  const data = await res.json();
-  if (!res.ok || (data.code !== undefined && data.code !== 0)) {
-    throw new Error(`Zoho attachment ${res.status}: ${data.message || JSON.stringify(data)}`);
-  }
-  return data;
-}
-
-async function createBill(env, payload) {
-  const cleaned = clean(payload);
-  applyDefaultAccount(cleaned, env.ZOHO_DEFAULT_EXPENSE_ACCOUNT_ID);
-  await applyTaxResolution(env, cleaned);
-  await ensureContact(env, cleaned, 'bill');
-  return zohoFetch(env, '/bills', { method: 'POST', body: JSON.stringify(cleaned) });
-}
-
-async function createInvoice(env, payload) {
-  const cleaned = clean(payload);
-  applyDefaultAccount(cleaned, env.ZOHO_DEFAULT_INCOME_ACCOUNT_ID);
-  await applyTaxResolution(env, cleaned);
-  await ensureContact(env, cleaned, 'invoice');
-  return zohoFetch(env, '/invoices', { method: 'POST', body: JSON.stringify(cleaned) });
-}
-
-// ---------- Account presets ----------
-// Hardcoded so the UI can show a dropdown without an extra Zoho call.
-// Edit this list if your Chart of Accounts changes.
-const ACCOUNT_PRESETS = [
-  { id: '3749165000000000567', name: 'Cost of Goods Sold', kind: 'expense' },
-  { id: '3749165000000032038', name: 'Material',           kind: 'expense' },
-  { id: '3749165000000032037', name: 'Labor',              kind: 'expense' },
-  { id: '3749165000000000576', name: 'Uncategorized',      kind: 'expense' },
-  // Add income accounts here when ready, e.g.:
-  // { id: 'XXXX', name: 'Sales', kind: 'income' },
-];
-
-// ---------- Router ----------
-
-export default {
-  async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-
-    const url = new URL(request.url);
-    try {
-      if (url.pathname === '/extract' && request.method === 'POST') {
-        const { fileBase64, mimeType, kind, model } = await request.json();
-        if (!fileBase64 || !mimeType || !kind) {
-          return json({ error: 'fileBase64, mimeType, kind required' }, 400);
-        }
-        const data = await extractInvoice(env, fileBase64, mimeType, kind, model);
-        return json(data);
-      }
-
-      if (url.pathname === '/contacts/search' && request.method === 'GET') {
-        const name = url.searchParams.get('name');
-        const type = url.searchParams.get('type');
-        if (!name || !type) return json({ error: 'name and type required' }, 400);
-        const contacts = await searchContact(env, name, type);
-        return json({ contacts });
-      }
-
-      if (url.pathname === '/push' && request.method === 'POST') {
-        const { kind, payload } = await request.json();
-        if (kind === 'bill') return json(await createBill(env, payload));
-        if (kind === 'invoice') return json(await createInvoice(env, payload));
-        return json({ error: "kind must be 'bill' or 'invoice'" }, 400);
-      }
-
-      if (url.pathname === '/bills/attach' && request.method === 'POST') {
-        const { billId, fileBase64, mimeType, filename } = await request.json();
-        if (!billId || !fileBase64 || !mimeType) {
-          return json({ error: 'billId, fileBase64, mimeType required' }, 400);
-        }
-        const data = await attachToBill(env, billId, fileBase64, mimeType, filename || 'invoice');
-        return json(data);
-      }
-
-      if (url.pathname === '/contacts/create' && request.method === 'POST') {
-        const body = await request.json();
-        const contactPayload = buildContactPayload(body);
-        const created = await createContact(env, contactPayload);
-        return json({ contact: created });
-      }
-
-      if (url.pathname === '/models' && request.method === 'GET') {
-        return json({ models: ALLOWED_GEMINI_MODELS, default: DEFAULT_GEMINI_MODEL });
-      }
-
-      if (url.pathname === '/taxes' && request.method === 'GET') {
-        const taxes = await listTaxes(env);
-        // Return a slim list of {id, name, percentage}
-        const slim = taxes
-          .map((t) => ({
-            id: t.tax_id,
-            name: t.tax_name,
-            percentage: parseFloat(t.tax_percentage),
-          }))
-          .filter((t) => !isNaN(t.percentage))
-          .sort((a, b) => a.percentage - b.percentage);
-        return json({ taxes: slim });
-      }
-
-      if (url.pathname === '/tax-exemptions' && request.method === 'GET') {
-        const exemptions = await listTaxExemptions(env);
-        return json({ exemptions });
-      }
-
-      if (url.pathname === '/accounts' && request.method === 'GET') {
-        return json({ accounts: ACCOUNT_PRESETS });
-      }
-
-      if (url.pathname === '/' && request.method === 'GET') {
-        return json({ ok: true, message: 'Invoice → Zoho Books worker is running' });
-      }
-
-      return json({ error: 'not found' }, 404);
-    } catch (err) {
-      return json({ error: err.message || String(err) }, 500);
-    }
-  },
 };
+
+$('reset').onclick = () => {
+  $('split').hidden = true;
+  $('file').value = '';
+  currentFile = null;
+  currentFileBase64 = null;
+  currentMimeType = null;
+  contactId = null;
+  setStatus('');
+};
+
+$('mnv_gst_treatment').addEventListener('change', (e) => {
+  const show = GST_TREATMENTS_WITH_GSTIN.includes(e.target.value);
+  $('mnv_gst_no_wrap').style.display = show ? '' : 'none';
+  if (!show) $('mnv_gst_no').value = '';
+});
+
+// Auto-correct manual-add treatment from GSTIN prefix, same logic as the inline panel.
+$('mnv_gst_no').addEventListener('input', (e) => {
+  const gstin = e.target.value.toUpperCase().trim();
+  const inferred = inferGstTreatment(gstin);
+  if (!inferred) return;
+  const tSel = $('mnv_gst_treatment');
+  if (!tSel.value || GST_TREATMENTS_WITH_GSTIN.includes(tSel.value)) {
+    if (tSel.value !== inferred) {
+      tSel.value = inferred;
+      $('mnv_gst_no_wrap').style.display = '';
+    }
+  }
+});
+
+$('mnv_save').onclick = async (e) => {
+  e.preventDefault();
+  const setMnvStatus = (msg, isErr = false) => {
+    const s = $('mnv_status');
+    s.textContent = msg;
+    s.style.color = isErr ? 'var(--red)' : 'var(--green)';
+  };
+  const payload = {
+    type: $('mnv_type').value,
+    name: $('mnv_name').value.trim(),
+    gst_treatment: $('mnv_gst_treatment').value,
+    gst_no: $('mnv_gst_no').value.trim().toUpperCase(),
+    first_name: $('mnv_first_name').value.trim(),
+    last_name: $('mnv_last_name').value.trim(),
+    email: $('mnv_email').value.trim(),
+  };
+  if (!payload.name) return setMnvStatus('Name is required', true);
+  if (!payload.gst_treatment) return setMnvStatus('GST Treatment is required', true);
+  if (payload.gst_treatment === 'business_gst' && !payload.gst_no) {
+    return setMnvStatus('GSTIN is required for Registered Business', true);
+  }
+  setMnvStatus('Creating in Zoho…');
+  try {
+    const res = await fetch(`${WORKER_URL}/contacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'create failed');
+    setMnvStatus(`✅ Created. Contact ID: ${data.contact.contact_id}`);
+    ['mnv_name', 'mnv_gst_no', 'mnv_first_name', 'mnv_last_name', 'mnv_email'].forEach((id) => ($(id).value = ''));
+    $('mnv_gst_treatment').value = '';
+    $('mnv_gst_no_wrap').style.display = 'none';
+  } catch (err) {
+    setMnvStatus(`Failed: ${err.message}`, true);
+  }
+};
+</script>
+</body>
+</html>
